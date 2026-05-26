@@ -11,7 +11,10 @@ import type { CodeCheckResult } from "./types.ts";
  * not to require a specific shell on the user's machine.
  */
 export async function checkBash(code: string, timeoutMs: number): Promise<CodeCheckResult> {
-	const result = await runWithStdin("bash", ["-n", "/dev/stdin"], code, timeoutMs);
+	// `bash -n` with no positional argument reads from stdin natively on every
+	// platform that has bash. Avoid `/dev/stdin` — it doesn't exist on Windows
+	// (Git Bash, WSL aside) and behaves oddly on some BSDs.
+	const result = await runWithStdin("bash", ["-n"], code, timeoutMs);
 	if (result.timedOut) {
 		return {
 			ok: false,

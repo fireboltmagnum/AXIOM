@@ -27,6 +27,7 @@ import {
 	streamSimple,
 } from "@axiom/ai";
 import { AXIOMRuntime } from "../axiom/AXIOMRuntime.ts";
+import { BestOfNCoordinator } from "../axiom/BestOfNCoordinator.ts";
 import { GraphExecutionTracker } from "../axiom/GraphExecutionTracker.ts";
 import { RepairLoop } from "../axiom/RepairLoop.ts";
 import type { AxiomTaskClassification, AxiomTaskPlan } from "../axiom/RuntimeTypes.ts";
@@ -156,7 +157,23 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| {
+			type: "axiom_repair_loop_exhausted";
+			attempts: number;
+			reason: "max-attempts" | "repeat" | "growth";
+			verifierCommand: string;
+			firstFailure?: string;
+	  }
+	| {
+			type: "axiom_best_of_n_winner";
+			totalCandidates: number;
+			winnerAttempt: number;
+			winnerPassed: boolean;
+			winnerIssueCount: number;
+			regressionDetected: boolean;
+			reason: string;
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -367,6 +384,19 @@ export class AgentSession {
 	private _repairLoopRepeatCount = 0;
 	private _repairLoopLastIssueCount = 0;
 	private _repairLoopStopped = false;
+	/** Files mutated by `edit`/`write` tools during the current turn. Drained
+	 * (and cleared) when the end-of-turn repair runs. Aggregating across the
+	 * turn means we only invoke the verifier ONCE per turn no matter how many
+	 * edits the agent emitted — much cheaper than the previous per-edit run. */
+	private _repairLoopPendingFiles = new Set<string>();
+	/** True when this turn already queued an IP-retry followUp; we suppress the
+	 * repair-loop retry in that case so the agent only gets one followUp per
+	 * turn (the more specific one wins). */
+	private _repairLoopSuppressForTurn = false;
+	/** Best-of-N coordinator. Records each repair-loop attempt as a candidate
+	 * and at exhaustion picks the one that converged best. No-op when
+	 * `bestOfN <= 1`. */
+	private _bestOfN = new BestOfNCoordinator();
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -466,6 +496,9 @@ export class AgentSession {
 
 	private _withAxiomManagedTools(toolNames: string[]): string[] {
 		const next = new Set(toolNames);
+		if (!this._allowedToolNames || this._allowedToolNames.has("todo_list")) {
+			next.add("todo_list");
+		}
 		if (this._shouldAutoEnableUnderstandCode()) {
 			next.add("understand_code");
 		} else {
@@ -609,21 +642,12 @@ export class AgentSession {
 					.map((part) => part.text)
 					.join("\n"),
 			);
-			const repairPacket = await this._maybeRunRepairLoop(toolCall.name, args, finalIsError);
-			if (
-				!graphNote &&
-				!repairPacket &&
-				content === result.content &&
-				details === result.details &&
-				finalIsError === isError
-			) {
+			this._noteMutatedFileForRepair(toolCall.name, args, finalIsError);
+			if (!graphNote && content === result.content && details === result.details && finalIsError === isError) {
 				return undefined;
 			}
 			if (graphNote) {
 				content = [...content, { type: "text", text: graphNote }];
-			}
-			if (repairPacket) {
-				content = [...content, { type: "text", text: repairPacket }];
 			}
 			return {
 				content,
@@ -631,6 +655,13 @@ export class AgentSession {
 				isError: finalIsError,
 			};
 		};
+	}
+
+	private _noteMutatedFileForRepair(toolName: string, args: unknown, isError: boolean): void {
+		if (isError) return;
+		const changedFile = this._extractMutatedFile(toolName, args);
+		if (!changedFile) return;
+		this._repairLoopPendingFiles.add(changedFile);
 	}
 
 	private _extractMutatedFile(toolName: string, args: unknown): string | undefined {
@@ -646,28 +677,98 @@ export class AgentSession {
 		});
 	}
 
-	private async _maybeRunRepairLoop(toolName: string, args: unknown, isError: boolean): Promise<string | undefined> {
-		if (isError || this._repairLoopStopped) return undefined;
+	/**
+	 * End-of-turn repair gate. Called from the message_end handler AFTER the IP
+	 * validator has had its turn. We aggregate all file mutations from the turn
+	 * (see {@link _repairLoopPendingFiles}) and run the verifier exactly once.
+	 * Failure feedback is delivered as a hidden `<axiom_internal_repair_loop>`
+	 * followUp message — the user UI strips it, but the model sees the full
+	 * packet so it can correct.
+	 *
+	 * Exhaustion path (max attempts, repeated identical failure, or runaway
+	 * failure growth): writes a Reflexion via {@link AXIOMRuntime.captureFailure}
+	 * and emits a `axiom_repair_loop_exhausted` session event so the TUI can
+	 * surface a one-line summary. The model still receives the packet so its
+	 * next reply is informed.
+	 */
+	private async _maybeRunRepairLoopAtTurnEnd(traceId: string | undefined): Promise<void> {
+		if (this._repairLoopStopped || this._repairLoopSuppressForTurn) {
+			this._repairLoopPendingFiles.clear();
+			return;
+		}
 		const settings = this.settingsManager.getAxiomSettings();
-		if (!settings.enabled || !settings.repairLoop || settings.repairLoopMaxAttempts <= 0) return undefined;
-		if (this._repairLoopAttempts >= settings.repairLoopMaxAttempts) return undefined;
-
-		const changedFile = this._extractMutatedFile(toolName, args);
-		if (!changedFile) return undefined;
+		if (!settings.enabled || !settings.repairLoop || settings.repairLoopMaxAttempts <= 0) {
+			this._repairLoopPendingFiles.clear();
+			return;
+		}
+		if (this._repairLoopAttempts >= settings.repairLoopMaxAttempts) {
+			this._repairLoopPendingFiles.clear();
+			return;
+		}
+		const changedFiles = [...this._repairLoopPendingFiles];
+		this._repairLoopPendingFiles.clear();
+		if (changedFiles.length === 0) return;
 
 		const result = await this._repairLoop.run({
-			changedFiles: [changedFile],
+			changedFiles,
 			timeoutMs: settings.repairLoopTimeoutMs,
 			attempt: this._repairLoopAttempts + 1,
 			maxAttempts: settings.repairLoopMaxAttempts,
 		});
-		if (!result) return undefined;
+		if (!result) return;
+
+		const attemptIndex = this._repairLoopAttempts + (result.passed ? 0 : 1);
+		this._axiomRuntime.recordRepairAttempt(traceId, {
+			attempt: attemptIndex,
+			maxAttempts: settings.repairLoopMaxAttempts,
+			verifierCommand: result.verifier.command,
+			verifierKind: result.verifier.kind,
+			passed: result.passed,
+			exitCode: result.exitCode,
+			timedOut: result.timedOut,
+			durationMs: result.durationMs,
+			issueCount: result.issues.length,
+			signature: result.signature,
+		});
+
+		// Best-of-N: record this attempt as a candidate regardless of pass/fail
+		// so the coordinator can pick the best one if the task exhausts. No-op
+		// when bestOfN <= 1.
+		if (settings.bestOfN > 1) {
+			const firstIssue = result.issues[0];
+			const candidateId = `${traceId ?? "no-trace"}#0#${attemptIndex}`;
+			this._bestOfN.recordCandidate({
+				id: candidateId,
+				rolloutIndex: 0,
+				attemptIndex,
+				passed: result.passed,
+				issueCount: result.issues.length,
+				changedFileCount: changedFiles.length,
+				signature: result.signature,
+				verifierCommand: result.verifier.command,
+				durationMs: result.durationMs,
+				recordedAt: new Date().toISOString(),
+				firstFailure: firstIssue
+					? `${firstIssue.file ?? "(unknown)"}${firstIssue.line ? `:${firstIssue.line}` : ""}: ${firstIssue.message}`
+					: undefined,
+			});
+			this._axiomRuntime.recordBestOfNCandidate(traceId, {
+				candidateId,
+				rolloutIndex: 0,
+				attemptIndex,
+				passed: result.passed,
+				issueCount: result.issues.length,
+				changedFileCount: changedFiles.length,
+				signature: result.signature,
+				durationMs: result.durationMs,
+			});
+		}
 
 		if (result.passed) {
 			this._repairLoopLastSignature = undefined;
 			this._repairLoopRepeatCount = 0;
 			this._repairLoopLastIssueCount = 0;
-			return result.packet;
+			return;
 		}
 
 		this._repairLoopAttempts++;
@@ -679,19 +780,86 @@ export class AgentSession {
 		this._repairLoopLastSignature = result.signature;
 		this._repairLoopLastIssueCount = result.issues.length;
 
+		let exhaustReason: "max-attempts" | "repeat" | "growth" | undefined;
+		let packet = result.packet;
 		if (this._repairLoopRepeatCount >= 2) {
-			this._repairLoopStopped = true;
-			return `${result.packet}\nRepairLoop stop: the same verifier failure repeated twice. Do not keep retrying blindly; inspect the exact owner/path before another edit.`;
+			exhaustReason = "repeat";
+			packet = `${packet}\nRepairLoop stop: the same verifier failure repeated twice. Do not keep retrying blindly; inspect the exact owner/path before another edit.`;
+		} else if (grewBadly) {
+			exhaustReason = "growth";
+			packet = `${packet}\nRepairLoop stop: the parsed failure count grew sharply. Stop broad rewrites and isolate the first failing file/function.`;
+		} else if (this._repairLoopAttempts >= settings.repairLoopMaxAttempts) {
+			exhaustReason = "max-attempts";
+			packet = `${packet}\nRepairLoop stop: verifier repair budget exhausted for this task.`;
 		}
-		if (grewBadly) {
+
+		if (exhaustReason) {
 			this._repairLoopStopped = true;
-			return `${result.packet}\nRepairLoop stop: the parsed failure count grew sharply. Stop broad rewrites and isolate the first failing file/function.`;
+			this._axiomRuntime.recordRepairExhausted(traceId, {
+				attempts: this._repairLoopAttempts,
+				reason: exhaustReason,
+				signature: result.signature,
+			});
+			// Best-of-N: at exhaustion, pick the strongest candidate across all
+			// recorded attempts. If an earlier attempt scored better than the
+			// last one, surface that so the user knows a regression occurred
+			// and the agent gets the hint in the followUp packet.
+			if (settings.bestOfN > 1) {
+				const selection = this._bestOfN.selectWinner();
+				if (selection) {
+					this._axiomRuntime.recordBestOfNWinner(traceId, {
+						winnerId: selection.winner.id,
+						totalCandidates: selection.totalCandidates,
+						regressionDetected: selection.regressionDetected,
+						reason: selection.reason,
+						passed: selection.winner.passed,
+						issueCount: selection.winner.issueCount,
+					});
+					if (selection.regressionDetected) {
+						packet = `${packet}\nBest-of-N: attempt #${selection.winner.attemptIndex} was the strongest candidate (${selection.reason}). Consider reverting to that attempt's approach before any further edits.`;
+						this._emit({
+							type: "axiom_best_of_n_winner",
+							totalCandidates: selection.totalCandidates,
+							winnerAttempt: selection.winner.attemptIndex,
+							winnerPassed: selection.winner.passed,
+							winnerIssueCount: selection.winner.issueCount,
+							regressionDetected: true,
+							reason: selection.reason,
+						});
+					}
+				}
+			}
+			if (this._activeAxiomPlan && this._activeAxiomClassification) {
+				const firstIssue = result.issues[0];
+				this._axiomRuntime.captureFailure({
+					traceId,
+					taskText: this._activeAxiomUserText,
+					taskKind: this._activeAxiomClassification.kind,
+					abstraction: this._activeAxiomPlan.abstraction,
+					failureType: "verifier-failed",
+					failureCodes: result.issues.slice(0, 5).map((i) => i.kind),
+					cause: firstIssue
+						? `${firstIssue.file ?? "(unknown)"}${firstIssue.line ? `:${firstIssue.line}` : ""}: ${firstIssue.message}`
+						: `verifier ${result.verifier.command} failed with exit ${result.exitCode}`,
+					correction: `Re-read the failing file/owner and make a targeted fix; do not rewrite unrelated code. Repair budget exhausted after ${this._repairLoopAttempts} attempt(s).`,
+				});
+			}
+			this._emit({
+				type: "axiom_repair_loop_exhausted",
+				attempts: this._repairLoopAttempts,
+				reason: exhaustReason,
+				verifierCommand: result.verifier.command,
+				firstFailure: result.issues[0]
+					? `${result.issues[0].file ?? "(unknown)"}${result.issues[0].line ? `:${result.issues[0].line}` : ""}: ${result.issues[0].message}`
+					: undefined,
+			});
 		}
-		if (this._repairLoopAttempts >= settings.repairLoopMaxAttempts) {
-			this._repairLoopStopped = true;
-			return `${result.packet}\nRepairLoop stop: verifier repair budget exhausted for this task.`;
-		}
-		return result.packet;
+
+		// Deliver the packet as a hidden followUp so the model gets a fresh turn
+		// to repair while the user UI filters it out (see isAxiomRepairLoopText).
+		void this.sendUserMessage(packet, { deliverAs: "followUp" }).catch(() => {
+			// Fire-and-forget; matches the IP-retry pattern.
+		});
 	}
 
 	private _recordAxiomGraphToolStart(toolCallId: string, toolName: string): void {
@@ -747,7 +915,15 @@ export class AgentSession {
 	 *   2. Abort budget enforced via `_axiomStreamAbortsThisTask`.
 	 */
 	private _onStreamChunkChecked(result: import("../axiom/StreamingIPValidator.ts").StreamingChunkCheckResult): void {
+		// Stale-callback guard: a checker (especially the python subprocess) can
+		// resolve hundreds of ms after the task it belongs to ended. Without this
+		// guard, that late callback would (a) record a `stream_check` event into
+		// an unrelated trace, and (b) queue a retry message that gets injected
+		// into whatever task the user runs NEXT. Bail completely if the trace is
+		// no longer active.
 		const traceId = this._activeAxiomTraceId;
+		if (!traceId) return;
+
 		this._axiomRuntime.recordStreamCheck(traceId, result);
 		if (result.ok) return;
 		if (this._axiomStreamAbortPending) return;
@@ -949,12 +1125,23 @@ export class AgentSession {
 			// IP retry-with-feedback: if validation failed and there is an agent-facing
 			// feedback message, queue it as a follow-up so the model re-answers, addressing
 			// the specific issues. Each task allows at most ipMaxRetries injections.
-			if (validation?.status === "failed" && validation.agentFeedback) {
+			//
+			// Streaming-abort suppression: when a streaming chunk check has ALREADY
+			// fired `agent.abort()` and queued a precise retry, the assistant message
+			// ends with `stopReason: "aborted"`. The post-message validator then sees
+			// that as a generic `provider-stop-error` and would queue a second retry
+			// on top of the precise one. Skip the post-message retry in that case —
+			// the streaming feedback is more useful and there's already a follow-up
+			// pending in the queue.
+			const streamingAlreadyHandled = this._axiomStreamAbortPending;
+			let ipRetryQueued = false;
+			if (validation?.status === "failed" && validation.agentFeedback && !streamingAlreadyHandled) {
 				const errorIssues = validation.issues.filter((i) => i.severity === "error");
 				const maxRetries = this.settingsManager.getAxiomSettings().ipMaxRetries;
 				const lastAttempt = !(maxRetries > 0 && this._axiomIPRetryCount < maxRetries);
 
 				if (!lastAttempt) {
+					ipRetryQueued = true;
 					const attempt = this._axiomIPRetryCount + 1;
 					this._axiomIPRetryCount = attempt;
 					this._axiomRuntime.recordIPRetry(
@@ -991,6 +1178,15 @@ export class AgentSession {
 					});
 				}
 			}
+
+			// End-of-turn verifier repair loop. Skip if we already queued an
+			// IP-retry followUp this turn (the agent gets one followUp per turn,
+			// and a real IP/syntax problem is more urgent than a verifier
+			// failure that the IP fix may itself resolve).
+			this._repairLoopSuppressForTurn = ipRetryQueued || streamingAlreadyHandled;
+			void this._maybeRunRepairLoopAtTurnEnd(traceId).catch(() => {
+				// Swallow: repair-loop errors must never break the agent loop.
+			});
 			return;
 		}
 
@@ -1418,6 +1614,9 @@ export class AgentSession {
 		this._repairLoopRepeatCount = 0;
 		this._repairLoopLastIssueCount = 0;
 		this._repairLoopStopped = false;
+		this._repairLoopPendingFiles.clear();
+		this._repairLoopSuppressForTurn = false;
+		this._bestOfN.reset();
 		this._axiomRuntime.startTrace({
 			traceId,
 			sessionId: this.sessionId,
@@ -3135,7 +3334,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "rg", "find", "ls"];
 		const baseActiveToolNames = this._withAxiomManagedTools(options.activeToolNames ?? defaultActiveToolNames);
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,

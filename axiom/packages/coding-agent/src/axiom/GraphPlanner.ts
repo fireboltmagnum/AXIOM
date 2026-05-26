@@ -35,7 +35,11 @@ interface LLMOptions {
 
 const buildSystemPrompt = (candidateCount: number, availableTools: string[]): string => {
 	const tools = availableTools.length > 0 ? availableTools.join(", ") : "(no tools)";
-	return `You are AXIOM's task planner. You DO NOT answer the user task. You produce a structured plan.
+	return `You are AXIOM's recursive execution planner. You DO NOT answer the user task. You produce a deeply decomposed executable task tree.
+
+Primary directive:
+For every task and subtask, ask: "Can this still be broken into smaller executable actions?"
+If yes, keep decomposing. Stop only when every leaf node is atomic: one action, one intent, one concrete output, one measurable success condition.
 
 Given a user task, do all three steps and return ONE JSON object:
 
@@ -45,7 +49,19 @@ Given a user task, do all three steps and return ONE JSON object:
    - "risk": likelihood this derails (loops, gets stuck, produces wrong output). LOWER IS BETTER.
    Be honest. Do not score every candidate 9/9/2 — differentiate them.
 2. Pick the candidate with the highest (feasibility + completeness - risk). State the chosen candidate id and a one-sentence reason.
-3. Decompose the chosen approach into 3-8 directed subgoal nodes. Each node has an id ("n1", "n2", ...), a short description, and a list of node ids it depends on. Node n1 has no dependencies. Each node may name a preferred tool from this list: ${tools}.
+3. Recursively decompose the chosen approach into a hierarchical execution tree with 8-30 nodes for complex tasks. Use dotted ids to preserve hierarchy: "n1", "n1.1", "n1.1.1", "n2", etc. Each node has a short description, dependencies, parentId, depth, atomic, successCriteria, output, and optionally expectedTool from this list: ${tools}.
+
+Domain decomposition hints:
+- Software: architecture, files, modules, APIs, schemas, functions, tests, verification, security, deployment.
+- Business: operations, finance, legal, hiring, sales, marketing, support, analytics, deliverables.
+- Creative: structure, scenes, dialogue, shots, sound, editing, publishing.
+- Research: hypotheses, datasets, preprocessing, experiments, metrics, validation, reporting.
+
+Atomic node rules:
+- atomic=true only for leaves that are directly executable and need no further planning.
+- atomic=false for grouping/planning nodes that have children.
+- Do not use vague verbs like optimize, improve, handle, manage, support, integrate, or enhance unless the node is decomposed into explicit children.
+- Atomic descriptions must be singular actions such as "Create users table", "Add email index", "Run typecheck", or "Read src/foo.ts".
 
 Reply with this exact JSON shape and nothing else:
 {
@@ -55,7 +71,27 @@ Reply with this exact JSON shape and nothing else:
   "chosenId": "c1",
   "chosenReason": "...",
   "nodes": [
-    { "id": "n1", "description": "...", "dependencies": [], "expectedTool": "grep" }
+    {
+      "id": "n1",
+      "parentId": null,
+      "depth": 1,
+      "description": "Top-level system or phase",
+      "dependencies": [],
+      "atomic": false,
+      "successCriteria": "All child nodes are complete",
+      "output": "Completed system or phase"
+    },
+    {
+      "id": "n1.1",
+      "parentId": "n1",
+      "depth": 2,
+      "description": "Atomic executable action",
+      "dependencies": [],
+      "atomic": true,
+      "successCriteria": "Specific measurable completion condition",
+      "output": "One concrete artifact or result",
+      "expectedTool": "rg"
+    }
   ]
 }
 
@@ -63,7 +99,9 @@ Rules:
 - Output a single valid JSON object. No commentary. No code fences. No explanation.
 - Keep descriptions short (one sentence each).
 - All three scores are required integers in [1, 10].
-- dependencies must reference earlier node ids only (no cycles).
+- dependencies must reference earlier node ids only (no cycles). Dependencies should point to prerequisite sibling/leaf work, not parent/child containment.
+- Every non-atomic node must have at least one child via parentId.
+- Every atomic node must have successCriteria and output.
 - "expectedTool" is optional; omit it if unsure.`;
 };
 
@@ -103,7 +141,26 @@ interface RawNode {
 	id?: unknown;
 	description?: unknown;
 	dependencies?: unknown;
+	parentId?: unknown;
+	depth?: unknown;
+	atomic?: unknown;
+	successCriteria?: unknown;
+	output?: unknown;
 	expectedTool?: unknown;
+}
+
+function inferParentId(id: string, seenIds: Set<string>): string | undefined {
+	const idx = id.lastIndexOf(".");
+	if (idx === -1) return undefined;
+	const parentId = id.slice(0, idx);
+	return seenIds.has(parentId) ? parentId : undefined;
+}
+
+function inferDepth(id: string, parentId: string | undefined, nodes: AxiomGraphNode[]): number {
+	if (/^n\d+(?:\.\d+)*$/.test(id)) return id.split(".").length;
+	if (!parentId) return 1;
+	const parent = nodes.find((node) => node.id === parentId);
+	return Math.max(1, (parent?.depth ?? 1) + 1);
 }
 
 function parseGraphJson(raw: string, startedAt: number, allowedTools: Set<string>): AxiomReasoningGraph | null {
@@ -156,6 +213,9 @@ function parseGraphJson(raw: string, startedAt: number, allowedTools: Set<string
 					.map((d) => d.trim())
 					.filter(Boolean)
 			: [];
+		const rawParentId =
+			typeof node.parentId === "string" && node.parentId.trim().length > 0 ? node.parentId.trim() : undefined;
+		const parentId = rawParentId && seenIds.has(rawParentId) ? rawParentId : inferParentId(id, seenIds);
 		const expectedTool =
 			typeof node.expectedTool === "string" && node.expectedTool.trim().length > 0
 				? node.expectedTool.trim()
@@ -165,15 +225,40 @@ function parseGraphJson(raw: string, startedAt: number, allowedTools: Set<string
 			id,
 			description: node.description.trim(),
 			dependencies: deps,
+			parentId,
+			depth:
+				typeof node.depth === "number" && Number.isFinite(node.depth)
+					? Math.max(1, Math.round(node.depth))
+					: undefined,
+			atomic: typeof node.atomic === "boolean" ? node.atomic : undefined,
+			successCriteria:
+				typeof node.successCriteria === "string" && node.successCriteria.trim().length > 0
+					? node.successCriteria.trim()
+					: undefined,
+			output: typeof node.output === "string" && node.output.trim().length > 0 ? node.output.trim() : undefined,
 			expectedTool:
 				expectedTool && allowedTools.size > 0 && !allowedTools.has(expectedTool) ? undefined : expectedTool,
 			status: "pending",
 		});
 	}
 
-	// Drop any dependency references to ids the model invented but didn't declare.
+	// Drop any dependency references to ids the model invented but didn't declare,
+	// then normalize parent/depth/atomic after the full node list is known.
 	for (const node of nodes) {
 		node.dependencies = node.dependencies.filter((d) => seenIds.has(d) && d !== node.id);
+		if (!node.parentId) node.parentId = inferParentId(node.id, seenIds);
+		node.depth = node.depth ?? inferDepth(node.id, node.parentId, nodes);
+	}
+	const parentIds = new Set(nodes.map((node) => node.parentId).filter((id): id is string => !!id));
+	for (const node of nodes) {
+		node.atomic = node.atomic ?? !parentIds.has(node.id);
+		if (!node.atomic) {
+			node.successCriteria = node.successCriteria ?? "All child actions are complete.";
+			node.output = node.output ?? "Completed sub-tree.";
+		} else {
+			node.successCriteria = node.successCriteria ?? "The action is complete and verified.";
+			node.output = node.output ?? "Completed atomic action.";
+		}
 	}
 
 	if (nodes.length === 0) return null;
@@ -227,6 +312,10 @@ function fallbackGraph(text: string, startedAt: number): AxiomReasoningGraph {
 				id: "n1",
 				description: text.length > 200 ? `${text.slice(0, 197)}…` : text,
 				dependencies: [],
+				depth: 1,
+				atomic: true,
+				successCriteria: "The requested task has been completed.",
+				output: "Completed response or code change.",
 				status: "pending",
 			},
 		],

@@ -73,7 +73,7 @@ function pickStrategyHints(classification: AxiomTaskClassification, recallCount:
 
 	if (kind === "coding") {
 		hints.push(
-			"For code changes, prefer minimal, surgical edits. Do not refactor untouched code. Run tools (read, grep, edit) when you need to verify state — do not guess at file contents.",
+			"For code changes, prefer minimal, surgical edits. Do not refactor untouched code. Run tools (read, rg, edit) when you need to verify state — do not guess at file contents.",
 		);
 	}
 

@@ -67,7 +67,7 @@ Return one valid JSON object and nothing else:
       "feasibility": 8,
       "completeness": 7,
       "risk": 3,
-      "expectedTool": "grep"
+      "expectedTool": "rg"
     }
   ]
 }
@@ -77,6 +77,7 @@ Rules:
 - Scores are integers in [1, 10].
 - feasibility and completeness are higher-is-better; risk is lower-is-better.
 - expectedTool is optional and must be one of: ${tools}.
+- Each action should be a concrete executable move, not a broad placeholder.
 - Keep each string one short sentence.`;
 }
 
@@ -104,7 +105,8 @@ Return one valid JSON object and nothing else:
 Rules:
 - Produce 1-3 useful children.
 - Scores are integers in [1, 10].
-- Mark terminal=true only when the branch has enough detail to execute directly.
+- Mark terminal=true only when the branch has enough detail to execute directly as one atomic action.
+- Prefer children that make the selected path more executable, measurable, and easy to verify.
 - expectedTool is optional and must be one of: ${tools}.
 - Keep strings short and concrete.`;
 }
@@ -323,6 +325,12 @@ function toGraphNodes(path: SearchNode[]): AxiomGraphNode[] {
 		id: `n${index + 1}`,
 		description: node.action || node.summary,
 		dependencies: index === 0 ? [] : [`n${index}`],
+		depth: 1,
+		atomic: Boolean(node.terminal) || index === path.length - 1,
+		successCriteria: node.terminal
+			? "The selected concrete move is complete and verified."
+			: "The next selected search move is ready.",
+		output: node.terminal ? "Completed atomic action." : "Prepared execution step.",
 		expectedTool: node.expectedTool,
 		status: "pending" as const,
 	}));
@@ -337,6 +345,10 @@ function toGraphNodes(path: SearchNode[]): AxiomGraphNode[] {
 			id: `n${index + 1}`,
 			description: descriptions[index] ?? "Validate the result and prepare the final answer.",
 			dependencies: index === 0 ? [] : [`n${index}`],
+			depth: 1,
+			atomic: true,
+			successCriteria: "The action is complete and verified.",
+			output: "Completed fallback action.",
 			status: "pending",
 		});
 	}

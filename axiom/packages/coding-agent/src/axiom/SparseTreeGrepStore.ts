@@ -94,6 +94,20 @@ export interface SparseTreeGrepExtractResult {
 export class SparseTreeGrepStore {
 	private readonly baseDir: string;
 	private readonly docsDir: string;
+	/**
+	 * Parsed-index cache. `listIndexes()` and `load()` are called on the hot
+	 * path of TaskPrimer; without this cache every search re-reads every JSON
+	 * blob from disk (~16ms with 2k chunks, ~3-5ms with a few smaller docs).
+	 * Keyed by documentId; invalidated by file mtimeMs so a separate process
+	 * rewriting the index transparently busts the cache without us having to
+	 * parse the JSON to check the `updatedAt` field.
+	 */
+	private readonly cache = new Map<string, { mtimeMs: number; index: AxiomSparseTreeGrepIndex }>();
+	/** Set of documentIds known to exist on disk after the most recent
+	 * `listIndexes()` scan. Used by `listIndexes()` to avoid re-reading every
+	 * file when the directory listing hasn't changed. */
+	private listScanDirSig: string | undefined;
+	private listScanResult: AxiomSparseTreeGrepIndex[] = [];
 
 	constructor(baseDir?: string) {
 		this.baseDir = baseDir ?? join(homedir(), ".axiom", "agent", "sparse-tree-grep");
@@ -204,25 +218,65 @@ export class SparseTreeGrepStore {
 
 	listIndexes(): AxiomSparseTreeGrepIndex[] {
 		if (!existsSync(this.docsDir)) return [];
+		// Cache the directory listing under a signature of "filename:mtime"
+		// across all .json blobs. If nothing has changed since the last scan,
+		// reuse the previously-parsed result and skip every JSON.parse.
+		const files = readdirSync(this.docsDir).filter((f) => f.endsWith(".json"));
+		const sig = files
+			.map((f) => {
+				try {
+					return `${f}:${statSync(join(this.docsDir, f)).mtimeMs}`;
+				} catch {
+					return `${f}:0`;
+				}
+			})
+			.sort()
+			.join("|");
+		if (this.listScanDirSig === sig) {
+			return this.listScanResult;
+		}
 		const indexes: AxiomSparseTreeGrepIndex[] = [];
-		for (const file of readdirSync(this.docsDir)) {
-			if (!file.endsWith(".json")) continue;
+		for (const file of files) {
+			const fullPath = join(this.docsDir, file);
 			try {
-				const parsed = JSON.parse(readFileSync(join(this.docsDir, file), "utf-8")) as AxiomSparseTreeGrepIndex;
-				if (parsed.version === 1) indexes.push(parsed);
+				const mtimeMs = statSync(fullPath).mtimeMs;
+				const parsed = JSON.parse(readFileSync(fullPath, "utf-8")) as AxiomSparseTreeGrepIndex;
+				if (parsed.version === 1) {
+					indexes.push(parsed);
+					this.cache.set(parsed.documentId, { mtimeMs, index: parsed });
+				}
 			} catch {
 				// skip malformed index
 			}
 		}
 		indexes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		this.listScanDirSig = sig;
+		this.listScanResult = indexes;
 		return indexes;
 	}
 
 	load(documentId: string): AxiomSparseTreeGrepIndex | undefined {
 		const path = join(this.docsDir, `${documentId}.json`);
-		if (!existsSync(path)) return undefined;
+		if (!existsSync(path)) {
+			this.cache.delete(documentId);
+			return undefined;
+		}
+		// Cache hit when on-disk mtime matches. `statSync` is much cheaper than
+		// re-parsing the JSON blob.
+		const cached = this.cache.get(documentId);
+		let mtimeMs: number;
 		try {
-			return JSON.parse(readFileSync(path, "utf-8")) as AxiomSparseTreeGrepIndex;
+			mtimeMs = statSync(path).mtimeMs;
+		} catch {
+			return undefined;
+		}
+		if (cached && cached.mtimeMs === mtimeMs) {
+			return cached.index;
+		}
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf-8")) as AxiomSparseTreeGrepIndex;
+			this.cache.set(documentId, { mtimeMs, index: parsed });
+			return parsed;
 		} catch {
 			return undefined;
 		}
@@ -244,12 +298,21 @@ export class SparseTreeGrepStore {
 	}
 
 	clearCache(): void {
-		// File-backed store has no long-lived cache yet.
+		this.cache.clear();
+		this.listScanDirSig = undefined;
+		this.listScanResult = [];
 	}
 
 	private save(index: AxiomSparseTreeGrepIndex): void {
 		if (!existsSync(this.docsDir)) mkdirSync(this.docsDir, { recursive: true });
-		writeFileSync(join(this.docsDir, `${index.documentId}.json`), `${JSON.stringify(index, null, 2)}\n`, "utf-8");
+		const path = join(this.docsDir, `${index.documentId}.json`);
+		writeFileSync(path, `${JSON.stringify(index, null, 2)}\n`, "utf-8");
+		try {
+			this.cache.set(index.documentId, { mtimeMs: statSync(path).mtimeMs, index });
+		} catch {
+			this.cache.delete(index.documentId);
+		}
+		this.listScanDirSig = undefined;
 		writeFileSync(join(this.baseDir, "INDEX_REPORT.md"), renderReport(this.listIndexes()), "utf-8");
 	}
 }

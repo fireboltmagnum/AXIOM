@@ -27,7 +27,7 @@ describe("RStarPlanner", () => {
 							feasibility: 7,
 							completeness: 7,
 							risk: 4,
-							expectedTool: "grep",
+							expectedTool: "rg",
 						},
 						{
 							summary: "Trace the failure",
@@ -37,7 +37,7 @@ describe("RStarPlanner", () => {
 							feasibility: 8,
 							completeness: 8,
 							risk: 2,
-							expectedTool: "grep",
+							expectedTool: "rg",
 						},
 					],
 				}),
@@ -98,7 +98,7 @@ describe("RStarPlanner", () => {
 			text: "Fix the failing TypeScript test.",
 			classification,
 			abstraction,
-			availableTools: ["grep", "read", "bash"],
+			availableTools: ["rg", "read", "bash"],
 			llm: {
 				model: registration.getModel(),
 				apiKey: "test",
@@ -119,7 +119,7 @@ describe("RStarPlanner", () => {
 		});
 		expect(graph?.candidates.map((candidate) => candidate.id)).toContain(graph?.chosenId);
 		expect(graph?.nodes).toHaveLength(3);
-		expect(graph?.nodes[0]?.expectedTool).toBe("grep");
+		expect(graph?.nodes[0]?.expectedTool).toBe("rg");
 		expect(graph?.nodes[1]?.expectedTool).toBe("read");
 		expect(registration.state.callCount).toBe(3);
 	});

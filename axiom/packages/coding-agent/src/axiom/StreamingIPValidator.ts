@@ -34,12 +34,17 @@ export interface StreamingValidatorOptions {
  *      assistant text so far. We extract every closed fence from scratch
  *      each call but skip blocks we've already validated (via startOffset key).
  *      This avoids state corruption across reorderings.
- *   2. Checker invocations are async and may overlap. To keep ordering sane
- *      we serialize them in a FIFO queue, but multiple deltas can arrive
- *      while one is in flight — they queue up.
- *   3. The validator NEVER blocks observe(); checks run in the background.
- *      The runtime decides what to do with results (typically: abort + retry
- *      on the first failure, suppress further checks).
+ *   2. Checks run CONCURRENTLY. Previously a FIFO queue serialized them so
+ *      a slow subprocess (python/bash) could push later chunks past the
+ *      1000ms budget even though each individual check was under cap. Each
+ *      chunk now runs independently; the per-chunk hard timeout in
+ *      `runChecker` still enforces the ceiling.
+ *   3. Concurrency caveat: callbacks fire in completion order, not source
+ *      order. When two chunks fail simultaneously the runtime aborts on
+ *      whichever finishes first. That's acceptable — the agent regenerates
+ *      the whole message and on the next pass both chunks are re-validated
+ *      from scratch (seenStartOffsets resets via `reset()` / new instance).
+ *   4. The validator NEVER blocks observe(); checks run in the background.
  *
  * Reset between assistant messages via `reset()` or by constructing a new
  * instance.
@@ -47,7 +52,7 @@ export interface StreamingValidatorOptions {
 export class StreamingIPValidator {
 	private readonly options: StreamingValidatorOptions;
 	private readonly seenStartOffsets = new Set<number>();
-	private queue: Promise<void> = Promise.resolve();
+	private readonly inFlight = new Set<Promise<void>>();
 	private stopped = false;
 
 	constructor(options: StreamingValidatorOptions) {
@@ -61,7 +66,7 @@ export class StreamingIPValidator {
 
 	reset(): void {
 		this.seenStartOffsets.clear();
-		this.queue = Promise.resolve();
+		this.inFlight.clear();
 		this.stopped = false;
 	}
 
@@ -77,40 +82,44 @@ export class StreamingIPValidator {
 		for (const block of blocks) {
 			if (this.seenStartOffsets.has(block.startOffset)) continue;
 			this.seenStartOffsets.add(block.startOffset);
-			this.enqueueCheck(block);
+			this.kickOffCheck(block);
 			queued++;
 		}
 		return queued;
 	}
 
-	private enqueueCheck(block: FencedCodeBlock): void {
-		this.queue = this.queue
-			.then(async () => {
-				if (this.stopped) return;
-				const { checker, resolvedLang } = pickCheckerForLanguage(block.language);
-				const startedAt = Date.now();
-				const result = await runChecker(checker, block.code, this.options.timeoutMs);
-				if (this.stopped) return;
-				this.options.onChunkChecked({
-					chunk: block,
-					resolvedLanguage: resolvedLang,
-					ok: result.ok,
-					line: result.line,
-					column: result.column,
-					message: result.message,
-					fixHint: result.fixHint,
-					latencyMs: Date.now() - startedAt,
-				});
-			})
-			.catch(() => {
-				// runChecker swallows its own errors; this catch exists only so a
-				// rogue rejection doesn't kill the FIFO chain.
+	private kickOffCheck(block: FencedCodeBlock): void {
+		const task: Promise<void> = (async () => {
+			if (this.stopped) return;
+			const { checker, resolvedLang } = pickCheckerForLanguage(block.language);
+			const startedAt = Date.now();
+			const result = await runChecker(checker, block.code, this.options.timeoutMs);
+			if (this.stopped) return;
+			this.options.onChunkChecked({
+				chunk: block,
+				resolvedLanguage: resolvedLang,
+				ok: result.ok,
+				line: result.line,
+				column: result.column,
+				message: result.message,
+				fixHint: result.fixHint,
+				latencyMs: Date.now() - startedAt,
 			});
+		})().catch(() => {
+			// runChecker swallows its own errors; this catch exists only so a
+			// rogue rejection doesn't leak as an unhandled promise.
+		});
+		this.inFlight.add(task);
+		void task.finally(() => {
+			this.inFlight.delete(task);
+		});
 	}
 
-	/** Awaitable handle for tests / shutdown. Resolves when the queue is drained. */
+	/** Awaitable handle for tests / shutdown. Resolves when every in-flight check has settled. */
 	async drain(): Promise<void> {
-		await this.queue;
+		while (this.inFlight.size > 0) {
+			await Promise.allSettled([...this.inFlight]);
+		}
 	}
 }
 

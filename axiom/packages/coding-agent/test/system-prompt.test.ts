@@ -46,7 +46,7 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- write:");
 		});
 
-		test("instructs models to resolve pi docs and examples under absolute base paths", () => {
+		test("instructs models to resolve AXIOM docs and examples under absolute base paths", () => {
 			const prompt = buildSystemPrompt({
 				contextFiles: [],
 				skills: [],
@@ -54,7 +54,7 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).toContain(
-				"- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
+				"- When reading AXIOM docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
 			);
 		});
 	});
@@ -83,6 +83,43 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).not.toContain("dynamic_tool");
+		});
+
+		test("includes tool snippets and guidelines when using a custom system prompt", () => {
+			const prompt = buildSystemPrompt({
+				customPrompt: "CUSTOM AXIOM PROMPT",
+				selectedTools: ["read", "rg", "understand_code", "code_graph", "flow_graph", "todo_list"],
+				toolSnippets: {
+					rg: "Search file contents with ripgrep",
+					understand_code: "Analyze code structure",
+					code_graph: "Build/query code graph",
+					flow_graph: "Analyze execution/data/effect flow",
+					todo_list: "Track multi-step work",
+				},
+				promptGuidelines: [
+					"Use understand_code before modifying unfamiliar code.",
+					"Use flow_graph when behavior or debugging flow matters.",
+				],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).toContain("CUSTOM AXIOM PROMPT");
+			expect(prompt).toContain("Available tools:");
+			expect(prompt).toContain("- rg: Search file contents with ripgrep");
+			expect(prompt).toContain("- understand_code: Analyze code structure");
+			expect(prompt).toContain("- code_graph: Build/query code graph");
+			expect(prompt).toContain("- flow_graph: Analyze execution/data/effect flow");
+			expect(prompt).toContain("- todo_list: Track multi-step work");
+			expect(prompt).toContain("- Use understand_code before modifying unfamiliar code.");
+			expect(prompt).toContain("- Use flow_graph when behavior or debugging flow matters.");
+			expect(prompt).toContain("AXIOM tool workflow:");
+			expect(prompt).toContain("Use todo_list at the start of work with 3+ steps");
+			expect(prompt).toContain("Use rg for exact text or regex search");
+			expect(prompt).toContain("Use understand_code for unfamiliar files or folders before broad edits");
+			expect(prompt).toContain("Use code_graph for cross-file relationships");
+			expect(prompt).toContain("Use flow_graph when behavior matters");
 		});
 	});
 

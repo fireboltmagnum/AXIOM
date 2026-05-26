@@ -30,10 +30,17 @@ export function pickCheckerForLanguage(rawLanguage: string): { checker: CodeChec
 		case "jsx":
 		case "mjs":
 		case "cjs":
+			return { checker: checkJavaScript, resolvedLang: "javascript" };
 		case "ts":
 		case "typescript":
 		case "tsx":
-			return { checker: checkJavaScript, resolvedLang: "javascript" };
+			// vm.Script cannot parse TS-only syntax (type annotations, generics, etc.)
+			// and any regex-based pre-stripper inevitably corrupts valid JS-shaped TS
+			// (e.g. it eats `: bar` in object literals). Until we ship a real TS parser
+			// we route TS/TSX through the language-agnostic balanced-delimiter check,
+			// which catches the catastrophic structural breakage (unclosed braces,
+			// unterminated strings) without producing false positives on annotations.
+			return { checker: checkBalancedDelimiters, resolvedLang: "typescript" };
 		case "json":
 		case "jsonc":
 		case "json5":

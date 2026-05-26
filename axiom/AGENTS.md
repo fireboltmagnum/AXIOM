@@ -84,7 +84,7 @@ Use the AXIOM tools deliberately. They are meant to reduce guessing before edits
 - For cross-file relationships, run `code_graph`.
 - For behavior/data/effects/debugging, run `flow_graph`.
 - For exact source truth, use `read`.
-- For exact textual search, use `grep`/`find`/`ls` before broad shell commands.
+- For exact textual search, use `rg`/`find`/`ls` before broad shell commands.
 
 ## Dependency and Install Security
 

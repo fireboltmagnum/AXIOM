@@ -41,6 +41,8 @@ export {
 export {
 	createGrepTool,
 	createGrepToolDefinition,
+	createRgTool,
+	createRgToolDefinition,
 	type GrepOperations,
 	type GrepToolDetails,
 	type GrepToolInput,
@@ -118,7 +120,13 @@ import { createCodeGraphTool, createCodeGraphToolDefinition } from "./code-graph
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createFlowGraphTool, createFlowGraphToolDefinition } from "./flow-graph.ts";
-import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
+import {
+	createGrepTool,
+	createGrepToolDefinition,
+	createRgTool,
+	createRgToolDefinition,
+	type GrepToolOptions,
+} from "./grep.ts";
 import { createKnowledgeGraphTool, createKnowledgeGraphToolDefinition } from "./knowledge-graph.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createPlaywrightCliTool, createPlaywrightCliToolDefinition } from "./playwright-cli.ts";
@@ -135,6 +143,7 @@ export type ToolName =
 	| "bash"
 	| "edit"
 	| "write"
+	| "rg"
 	| "grep"
 	| "find"
 	| "ls"
@@ -150,6 +159,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"bash",
 	"edit",
 	"write",
+	"rg",
 	"grep",
 	"find",
 	"ls",
@@ -182,6 +192,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createEditToolDefinition(cwd, options?.edit);
 		case "write":
 			return createWriteToolDefinition(cwd, options?.write);
+		case "rg":
+			return createRgToolDefinition(cwd, options?.grep);
 		case "grep":
 			return createGrepToolDefinition(cwd, options?.grep);
 		case "find":
@@ -217,6 +229,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createEditTool(cwd, options?.edit);
 		case "write":
 			return createWriteTool(cwd, options?.write);
+		case "rg":
+			return createRgTool(cwd, options?.grep);
 		case "grep":
 			return createGrepTool(cwd, options?.grep);
 		case "find":
@@ -254,7 +268,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
 		createReadToolDefinition(cwd, options?.read),
-		createGrepToolDefinition(cwd, options?.grep),
+		createRgToolDefinition(cwd, options?.grep),
 		createFindToolDefinition(cwd, options?.find),
 		createLsToolDefinition(cwd, options?.ls),
 	];
@@ -266,6 +280,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		bash: createBashToolDefinition(cwd, options?.bash),
 		edit: createEditToolDefinition(cwd, options?.edit),
 		write: createWriteToolDefinition(cwd, options?.write),
+		rg: createRgToolDefinition(cwd, options?.grep),
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
@@ -291,7 +306,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
 		createReadTool(cwd, options?.read),
-		createGrepTool(cwd, options?.grep),
+		createRgTool(cwd, options?.grep),
 		createFindTool(cwd, options?.find),
 		createLsTool(cwd, options?.ls),
 	];
@@ -303,6 +318,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		bash: createBashTool(cwd, options?.bash),
 		edit: createEditTool(cwd, options?.edit),
 		write: createWriteTool(cwd, options?.write),
+		rg: createRgTool(cwd, options?.grep),
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),

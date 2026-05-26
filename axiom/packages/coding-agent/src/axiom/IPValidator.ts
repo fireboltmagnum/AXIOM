@@ -70,7 +70,16 @@ const PLACEHOLDER_PATTERNS: { re: RegExp; label: string }[] = [
 	{ re: /\bLorem ipsum\b/i, label: "Lorem ipsum" },
 ];
 
-/** Find repeated paragraphs (>= 60 chars, identical, occurring 2+ times). Looping/stuck output. */
+/**
+ * Find repeated paragraphs (>= 60 chars, identical, occurring 2+ times) that
+ * make up a meaningful slice of the response.
+ *
+ * Why the ratio guard: a long legitimate answer can quote the same 80-char API
+ * signature or error message twice and that is fine. The pathology we want to
+ * catch is the model getting stuck and emitting the same block over and over
+ * — that pattern produces repetition that dominates the response. We only
+ * flag when duplicated content is at least 35% of the total trimmed length.
+ */
 function findRepetition(text: string): string | undefined {
 	const paragraphs = text
 		.split(/\n{2,}/)
@@ -80,36 +89,36 @@ function findRepetition(text: string): string | undefined {
 	for (const p of paragraphs) {
 		seen.set(p, (seen.get(p) ?? 0) + 1);
 	}
+	const totalLen = text.replace(/\s+/g, " ").trim().length;
+	if (totalLen === 0) return undefined;
 	for (const [p, count] of seen) {
-		if (count >= 2) return p;
+		if (count < 2) continue;
+		const dupeChars = p.length * count;
+		if (dupeChars / totalLen >= 0.35) return p;
 	}
 	return undefined;
 }
 
-/** Lightweight contradiction detector: "I cannot/can't/won't X" followed later by performing X. */
+/**
+ * Detect the actual refusal-then-comply antipattern: the message OPENS with a
+ * refusal (within the first sentence or first 200 chars) and then immediately
+ * does the thing it just refused (code fence or numbered list within ~200 chars
+ * of the refusal). The previous version flagged ANY "I cannot" anywhere in the
+ * response and triggered on legitimate text like "I cannot show exact line
+ * numbers without seeing your file. Here is what I recommend:" — those are
+ * helpful answers, not contradictions.
+ */
 function findRefusalContradiction(text: string): string | undefined {
-	// Heuristic: a refusal phrase early in the message, then a long body that does the task anyway.
-	const refusalRe = /\b(i\s+(?:cannot|can(?:not|'t)|will\s+not|won't|am\s+unable\s+to))\b/i;
-	const match = refusalRe.exec(text);
+	const head = text.slice(0, 200);
+	const refusalRe =
+		/\b(i\s+(?:cannot|can(?:not|'t)|will\s+not|won't|am\s+unable\s+to))\s+(do|help|assist|provide|write|create|generate|produce|comply|answer)\b/i;
+	const match = refusalRe.exec(head);
 	if (!match) return undefined;
-	const refusalPos = match.index;
-	// If the message is short, the refusal is probably the whole answer; not a contradiction.
-	if (text.length - refusalPos < 200) return undefined;
-	// If the remainder contains structured output (code fence, numbered list, "Here is"), flag it.
-	const remainder = text.slice(refusalPos + match[0].length);
-	if (/```|^\s*\d+\.\s|\bhere\s+(?:is|are)\b/im.test(remainder)) {
+	// Look for structured "doing the task" within 250 chars after the refusal.
+	const after = text.slice(match.index + match[0].length, match.index + match[0].length + 250);
+	if (/```|^\s*\d+\.\s/m.test(after)) {
 		return match[0];
 	}
-	return undefined;
-}
-
-/** Detect "Yes, ... No, ..." or "Correct ... incorrect" flips in short answers. */
-function findYesNoFlip(text: string): string | undefined {
-	if (text.length > 800) return undefined; // only meaningful for short answers
-	const yesNoRe = /\b(yes)\b[\s\S]{0,300}\b(no)\b|\b(no)\b[\s\S]{0,300}\b(yes)\b/i;
-	const correctnessRe = /\b(correct)\b[\s\S]{0,300}\b(incorrect)\b|\b(true)\b[\s\S]{0,200}\b(false)\b/i;
-	if (yesNoRe.test(text)) return "yes/no flip";
-	if (correctnessRe.test(text)) return "correct/incorrect flip";
 	return undefined;
 }
 
@@ -314,17 +323,10 @@ export class IPValidator {
 			});
 		}
 
-		checks.push("yes-no-flip");
-		const flip = findYesNoFlip(text);
-		if (flip) {
-			issues.push({
-				code: "binary-flip",
-				severity: "warning",
-				category: "logic",
-				message: `Response contains a ${flip}; the answer is ambiguous.`,
-				fixHint: "Pick a single stance (yes or no, correct or incorrect) and justify it.",
-			});
-		}
+		// `findYesNoFlip` was removed: matching "yes" / "no" within a 300-char
+		// window was a pure false-positive generator. It triggered on harmless
+		// phrases like "yes please", "no longer", "yes there are no exceptions".
+		// Detecting genuine ambiguity needs semantic understanding, not regex.
 
 		// --- Echo guard --------------------------------------------------------
 		checks.push("input-echo-guard");

@@ -96,7 +96,7 @@ export function createSparseTreeGrepToolDefinition(
 		promptGuidelines: [
 			"Use sparse_tree_grep index for long non-code documents before answering detailed questions about them.",
 			"Use sparse_tree_grep search to find candidate pages/chunks cheaply, then sparse_tree_grep extract for exact source text.",
-			"Do not use SparseTreeGrep for source code; use read/grep/understand_code for codebases.",
+			"Do not use SparseTreeGrep for source code; use read/rg/understand_code for codebases.",
 		],
 		parameters: sparseTreeGrepSchema,
 		executionMode: "sequential",

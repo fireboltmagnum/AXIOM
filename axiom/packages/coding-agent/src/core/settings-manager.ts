@@ -219,6 +219,15 @@ export interface AxiomSettings {
 	rStarExploration?: number;
 	/** Soft cap on concept summaries injected into the system prompt per task. */
 	conceptMaxRecall?: number;
+	/**
+	 * Best-of-N candidate selection across repair attempts. When >1, the
+	 * coordinator records every repair attempt as a candidate and on
+	 * exhaustion picks the one that converged best (passed verifier > fewer
+	 * issues > smaller diff > higher skill confidence). Today candidates come
+	 * from sequential attempts on a single session; the design generalizes to
+	 * parallel worktree rollouts later. 1 = disabled.
+	 */
+	bestOfN?: number;
 }
 
 export interface ResolvedAxiomSettings {
@@ -263,6 +272,7 @@ export interface ResolvedAxiomSettings {
 	rStarMaxDepth: number;
 	rStarExploration: number;
 	conceptMaxRecall: number;
+	bestOfN: number;
 }
 
 export const AXIOM_EFFORT_LEVELS: AxiomEffortLevel[] = ["off", "fast", "balanced", "rigorous", "custom"];
@@ -309,6 +319,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarMaxDepth: 0,
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
+		bestOfN: 1,
 	},
 	fast: {
 		enabled: true,
@@ -351,6 +362,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarMaxDepth: 0,
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
+		bestOfN: 1,
 	},
 	balanced: {
 		enabled: true,
@@ -370,12 +382,12 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		skillEvolution: true,
 		skillMaxRecall: 2,
 		skillMinComplexity: 50,
-		codeUnderstanding: false,
-		codeUnderstandingMaxRecall: 0,
-		codeGraph: false,
-		codeGraphMaxRecall: 0,
-		flowGraph: false,
-		flowGraphMaxRecall: 0,
+		codeUnderstanding: true,
+		codeUnderstandingMaxRecall: 2,
+		codeGraph: true,
+		codeGraphMaxRecall: 2,
+		flowGraph: true,
+		flowGraphMaxRecall: 2,
 		knowledgeGraph: true,
 		knowledgeGraphMaxRecall: 3,
 		sparseTreeGrep: true,
@@ -383,7 +395,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		repairLoop: true,
 		repairLoopMaxAttempts: 2,
 		repairLoopTimeoutMs: 20_000,
-		playwrightCli: false,
+		playwrightCli: true,
 		reasoningGraph: true,
 		reasoningGraphMinComplexity: 70,
 		totCandidates: 3,
@@ -393,6 +405,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarMaxDepth: 0,
 		rStarExploration: 1.4,
 		conceptMaxRecall: 3,
+		bestOfN: 3,
 	},
 	rigorous: {
 		enabled: true,
@@ -435,6 +448,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarMaxDepth: 3,
 		rStarExploration: 1.4,
 		conceptMaxRecall: 5,
+		bestOfN: 5,
 	},
 };
 
@@ -480,6 +494,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			rStarMaxDepth: settings?.rStarMaxDepth ?? profile.rStarMaxDepth,
 			rStarExploration: settings?.rStarExploration ?? profile.rStarExploration,
 			conceptMaxRecall: settings?.conceptMaxRecall ?? profile.conceptMaxRecall,
+			bestOfN: settings?.bestOfN ?? profile.bestOfN,
 		};
 	}
 	return {
@@ -524,6 +539,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		rStarMaxDepth: settings?.rStarMaxDepth ?? 3,
 		rStarExploration: settings?.rStarExploration ?? 1.4,
 		conceptMaxRecall: settings?.conceptMaxRecall ?? 3,
+		bestOfN: settings?.bestOfN ?? 1,
 	};
 }
 
@@ -1473,6 +1489,7 @@ export class SettingsManager {
 			rStarMaxDepth: current.rStarMaxDepth,
 			rStarExploration: current.rStarExploration,
 			conceptMaxRecall: current.conceptMaxRecall,
+			bestOfN: current.bestOfN,
 		};
 		nextAxiomSettings[feature] = enabled;
 

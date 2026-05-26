@@ -601,6 +601,16 @@ export interface AxiomGraphNode {
 	id: string;
 	description: string;
 	dependencies: string[];
+	/** Parent node id for recursive execution trees. Undefined means top-level. */
+	parentId?: string;
+	/** 1-based tree depth for display. Top-level nodes are depth 1. */
+	depth?: number;
+	/** True when this node is a directly executable leaf action. */
+	atomic?: boolean;
+	/** One measurable condition proving this node is done. */
+	successCriteria?: string;
+	/** One concrete output/artifact this node should produce. */
+	output?: string;
 	expectedTool?: string;
 	status: AxiomGraphNodeStatus;
 	toolCallId?: string;
@@ -866,6 +876,54 @@ export type AxiomTraceRecord =
 			timestamp: string;
 			traceId: string;
 			snapshot: AxiomGraphExecutionSnapshot;
+	  }
+	| {
+			type: "repair_attempt";
+			timestamp: string;
+			traceId: string;
+			attempt: number;
+			maxAttempts: number;
+			verifierCommand: string;
+			verifierKind: string;
+			passed: boolean;
+			exitCode: number | null;
+			timedOut: boolean;
+			durationMs: number;
+			issueCount: number;
+			signature: string;
+	  }
+	| {
+			type: "repair_exhausted";
+			timestamp: string;
+			traceId: string;
+			attempts: number;
+			reason: "max-attempts" | "repeat" | "growth";
+			signature: string;
+	  }
+	| {
+			type: "bestof_candidate";
+			timestamp: string;
+			traceId: string;
+			candidateId: string;
+			rolloutIndex: number;
+			attemptIndex: number;
+			passed: boolean;
+			issueCount: number;
+			changedFileCount: number;
+			signature: string;
+			skillConfidence?: number;
+			durationMs: number;
+	  }
+	| {
+			type: "bestof_winner";
+			timestamp: string;
+			traceId: string;
+			winnerId: string;
+			totalCandidates: number;
+			regressionDetected: boolean;
+			reason: string;
+			passed: boolean;
+			issueCount: number;
 	  }
 	| { type: "task_end"; timestamp: string; traceId: string; latencyMs: number; outcome: "completed" | "error" };
 

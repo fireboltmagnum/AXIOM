@@ -67,6 +67,7 @@ export interface GrepToolOptions {
 function formatGrepCall(
 	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
 	theme: typeof import("../../modes/interactive/theme/theme.ts").theme,
+	toolName = "rg",
 ): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
@@ -75,7 +76,7 @@ function formatGrepCall(
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
 	let text =
-		theme.fg("toolTitle", theme.bold("grep")) +
+		theme.fg("toolTitle", theme.bold(toolName)) +
 		" " +
 		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
 		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
@@ -122,13 +123,18 @@ function formatGrepResult(
 export function createGrepToolDefinition(
 	cwd: string,
 	options?: GrepToolOptions,
+	toolName: "grep" | "rg" = "grep",
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
 	const customOps = options?.operations;
 	return {
-		name: "grep",
-		label: "grep",
-		description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
-		promptSnippet: "Search file contents for patterns (respects .gitignore)",
+		name: toolName,
+		label: toolName,
+		description: `Search file contents with ripgrep (rg). Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
+		promptSnippet: "Search file contents with ripgrep (rg, respects .gitignore)",
+		promptGuidelines: [
+			"Use rg for exact text/pattern search before broad shell commands.",
+			"Prefer rg over bash grep; this tool is backed by ripgrep and respects .gitignore.",
+		],
 		parameters: grepSchema,
 		async execute(
 			_toolCallId,
@@ -368,7 +374,7 @@ export function createGrepToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatGrepCall(args, theme));
+			text.setText(formatGrepCall(args, theme, toolName));
 			return text;
 		},
 		renderResult(result, options, theme, context) {
@@ -381,4 +387,15 @@ export function createGrepToolDefinition(
 
 export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentTool<typeof grepSchema> {
 	return wrapToolDefinition(createGrepToolDefinition(cwd, options));
+}
+
+export function createRgToolDefinition(
+	cwd: string,
+	options?: GrepToolOptions,
+): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
+	return createGrepToolDefinition(cwd, options, "rg");
+}
+
+export function createRgTool(cwd: string, options?: GrepToolOptions): AgentTool<typeof grepSchema> {
+	return wrapToolDefinition(createRgToolDefinition(cwd, options));
 }

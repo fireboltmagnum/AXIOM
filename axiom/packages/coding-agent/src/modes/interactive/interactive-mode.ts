@@ -47,6 +47,7 @@ import {
 } from "@axiom/tui";
 import { spawn, spawnSync } from "child_process";
 import { isAxiomIPRetryText } from "../../axiom/IPValidator.ts";
+import { isAxiomRepairLoopText } from "../../axiom/RepairLoop.ts";
 import {
 	APP_NAME,
 	APP_TITLE,
@@ -2691,6 +2692,28 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 
+			case "axiom_repair_loop_exhausted": {
+				const reasonLabel =
+					event.reason === "max-attempts"
+						? `${event.attempts} attempts`
+						: event.reason === "repeat"
+							? "same failure twice"
+							: "failure count growing";
+				const detail = event.firstFailure ? ` — ${event.firstFailure}` : "";
+				this.showStatus(`AXIOM repair loop stopped (${reasonLabel}): ${event.verifierCommand}${detail}`);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "axiom_best_of_n_winner": {
+				const status = event.winnerPassed
+					? `attempt #${event.winnerAttempt} passed`
+					: `attempt #${event.winnerAttempt} had ${event.winnerIssueCount} issue(s)`;
+				this.showStatus(`AXIOM best-of-${event.totalCandidates}: ${status} — ${event.reason}`);
+				this.ui.requestRender();
+				break;
+			}
+
 			case "message_start":
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
@@ -3059,7 +3082,7 @@ export class InteractiveMode {
 				// model re-answers. It is internal critique, not the human's input —
 				// the chat UI must not render it. The sentinel survives through the
 				// agent loop because we never strip it before display.
-				if (textContent && isAxiomIPRetryText(textContent)) {
+				if (textContent && (isAxiomIPRetryText(textContent) || isAxiomRepairLoopText(textContent))) {
 					break;
 				}
 				if (textContent) {
@@ -3678,7 +3701,7 @@ export class InteractiveMode {
 		const { steering: steeringMessages, followUp: rawFollowUpMessages } = this.getAllQueuedMessages();
 		// Filter out AXIOM's internal IP-retry payloads; they are not user-authored
 		// and shouldn't appear in the "Follow-up:" pending list either.
-		const followUpMessages = rawFollowUpMessages.filter((m) => !isAxiomIPRetryText(m));
+		const followUpMessages = rawFollowUpMessages.filter((m) => !isAxiomIPRetryText(m) && !isAxiomRepairLoopText(m));
 		if (steeringMessages.length > 0 || followUpMessages.length > 0) {
 			this.pendingMessagesContainer.addChild(new Spacer(1));
 			for (const message of steeringMessages) {

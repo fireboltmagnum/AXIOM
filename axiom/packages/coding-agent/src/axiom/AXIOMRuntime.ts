@@ -61,6 +61,44 @@ function buildSkillTitle(options: { taskKind: AxiomTaskKind; abstraction: AxiomA
 	return `${domain}${head}`.slice(0, 120);
 }
 
+function renderReasoningGraphTree(graph: AxiomReasoningGraph): string[] {
+	const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+	const childrenByParent = new Map<string, typeof graph.nodes>();
+	const roots: typeof graph.nodes = [];
+
+	for (const node of graph.nodes) {
+		const parentId = node.parentId && nodesById.has(node.parentId) ? node.parentId : undefined;
+		if (!parentId) {
+			roots.push(node);
+			continue;
+		}
+		const children = childrenByParent.get(parentId) ?? [];
+		children.push(node);
+		childrenByParent.set(parentId, children);
+	}
+
+	const rendered: string[] = [];
+	const visit = (node: (typeof graph.nodes)[number], depth: number) => {
+		const indent = "  ".repeat(Math.max(0, depth));
+		const deps = node.dependencies.length > 0 ? ` (depends: ${node.dependencies.join(", ")})` : "";
+		const tool = node.expectedTool ? ` [${node.expectedTool}]` : "";
+		const atomic = node.atomic ? " [atomic]" : "";
+		rendered.push(`${indent}- **${node.id}**${tool}${atomic} ${node.description}${deps}`);
+		if (node.atomic) {
+			if (node.successCriteria) rendered.push(`${indent}  Success: ${node.successCriteria}`);
+			if (node.output) rendered.push(`${indent}  Output: ${node.output}`);
+		}
+		for (const child of childrenByParent.get(node.id) ?? []) {
+			visit(child, depth + 1);
+		}
+	};
+
+	for (const root of roots.length > 0 ? roots : graph.nodes.filter((node) => !node.parentId)) {
+		visit(root, 0);
+	}
+	return rendered;
+}
+
 export class AXIOMRuntime {
 	private readonly classifier = new TaskClassifier();
 	private readonly validator = new IPValidator();
@@ -621,7 +659,11 @@ export class AXIOMRuntime {
 		}
 
 		if (plan.graph && plan.graph.nodes.length > 1) {
-			sections.push(plan.graph.source === "rstar" ? "# Reasoning Graph (rStar-lite)" : "# Reasoning Graph (AGoT)");
+			sections.push(
+				plan.graph.source === "rstar"
+					? "# Recursive Execution Plan (rStar-lite)"
+					: "# Recursive Execution Plan (AGoT)",
+			);
 			sections.push("");
 			if (plan.graph.search) {
 				sections.push(
@@ -673,16 +715,14 @@ export class AXIOMRuntime {
 				}
 				sections.push("");
 			}
-			sections.push("Execute the subgoals below in dependency order. Use the indicated tools where given.");
+			sections.push(
+				"Execute the recursive task tree below in dependency order. Non-atomic nodes are planning/grouping nodes; atomic leaf nodes are the concrete actions to execute. Do not skip directly from a broad node to implementation if it has children.",
+			);
 			sections.push(
 				"AXIOM may append <axiom_graph_execution> status blocks to tool results. Use those blocks to adapt the next subgoal without restarting the whole plan.",
 			);
 			sections.push("");
-			for (const node of plan.graph.nodes) {
-				const deps = node.dependencies.length > 0 ? ` (after: ${node.dependencies.join(", ")})` : "";
-				const tool = node.expectedTool ? ` [${node.expectedTool}]` : "";
-				sections.push(`- **${node.id}**${tool} ${node.description}${deps}`);
-			}
+			sections.push(...renderReasoningGraphTree(plan.graph));
 			sections.push("");
 		}
 
@@ -971,6 +1011,86 @@ export class AXIOMRuntime {
 			traceId,
 			outcome,
 			skillIds: [...skillIds],
+		});
+	}
+
+	recordRepairAttempt(
+		traceId: string | undefined,
+		params: {
+			attempt: number;
+			maxAttempts: number;
+			verifierCommand: string;
+			verifierKind: string;
+			passed: boolean;
+			exitCode: number | null;
+			timedOut: boolean;
+			durationMs: number;
+			issueCount: number;
+			signature: string;
+		},
+	): void {
+		if (!traceId) return;
+		this.traceStore.record({
+			type: "repair_attempt",
+			timestamp: new Date().toISOString(),
+			traceId,
+			...params,
+		});
+	}
+
+	recordRepairExhausted(
+		traceId: string | undefined,
+		params: { attempts: number; reason: "max-attempts" | "repeat" | "growth"; signature: string },
+	): void {
+		if (!traceId) return;
+		this.traceStore.record({
+			type: "repair_exhausted",
+			timestamp: new Date().toISOString(),
+			traceId,
+			...params,
+		});
+	}
+
+	recordBestOfNCandidate(
+		traceId: string | undefined,
+		params: {
+			candidateId: string;
+			rolloutIndex: number;
+			attemptIndex: number;
+			passed: boolean;
+			issueCount: number;
+			changedFileCount: number;
+			signature: string;
+			skillConfidence?: number;
+			durationMs: number;
+		},
+	): void {
+		if (!traceId) return;
+		this.traceStore.record({
+			type: "bestof_candidate",
+			timestamp: new Date().toISOString(),
+			traceId,
+			...params,
+		});
+	}
+
+	recordBestOfNWinner(
+		traceId: string | undefined,
+		params: {
+			winnerId: string;
+			totalCandidates: number;
+			regressionDetected: boolean;
+			reason: string;
+			passed: boolean;
+			issueCount: number;
+		},
+	): void {
+		if (!traceId) return;
+		this.traceStore.record({
+			type: "bestof_winner",
+			timestamp: new Date().toISOString(),
+			traceId,
+			...params,
 		});
 	}
 

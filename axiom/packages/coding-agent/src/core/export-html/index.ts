@@ -2,6 +2,7 @@ import type { AgentState } from "@axiom/agent-core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { isAxiomIPRetryText } from "../../axiom/IPValidator.ts";
+import { isAxiomRepairLoopText } from "../../axiom/RepairLoop.ts";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
@@ -21,11 +22,15 @@ function stripAxiomInternalEntries(entries: SessionEntry[]): SessionEntry[] {
 		const msg = entry.message;
 		if (msg.role !== "user") return true;
 		if (typeof msg.content === "string") {
-			return !isAxiomIPRetryText(msg.content);
+			return !isAxiomIPRetryText(msg.content) && !isAxiomRepairLoopText(msg.content);
 		}
 		if (Array.isArray(msg.content)) {
 			for (const part of msg.content) {
-				if (part.type === "text" && typeof part.text === "string" && isAxiomIPRetryText(part.text)) {
+				if (
+					part.type === "text" &&
+					typeof part.text === "string" &&
+					(isAxiomIPRetryText(part.text) || isAxiomRepairLoopText(part.text))
+				) {
 					return false;
 				}
 			}
