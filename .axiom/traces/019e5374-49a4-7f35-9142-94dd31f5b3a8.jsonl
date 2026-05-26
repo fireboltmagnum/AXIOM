@@ -1,0 +1,20 @@
+{"type":"task_start","timestamp":"2026-05-23T06:09:54.126Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","sessionId":"019e5374-49a4-7f35-9142-94dd31f5b3a8","cwd":"/Users/tinkerspace/Downloads/AXIOM/AXIOM-Pi.dev inspire","input":"bvjdjbksdvdvbsjbldkbdjksvvvv","classification":{"id":"c6925107-f899-4e90-abce-0479abe21ff9","kind":"general","route":"direct","complexity":20,"confidence":0.55,"reasons":["tools available: read, bash, edit, write"]},"model":{"provider":"google","model":"gemma-4-31b-it","api":"google-generative-ai","thinkingLevel":"high"},"startedAt":"2026-05-23T06:09:54.126Z"}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:54.136Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"agent_start"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:54.137Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"turn_start"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:54.137Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_start"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:54.138Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_end"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:56.881Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_start"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:56.883Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:56.884Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:57.363Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:58.077Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:58.762Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.341Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.342Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.342Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.344Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.381Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"message_update"}}
+{"type":"message_end","timestamp":"2026-05-23T06:09:59.381Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","message":{"role":"assistant","stopReason":"stop","provider":"google","model":"gemma-4-31b-it","textChars":71,"thinkingChars":323,"toolCallCount":0,"usage":{"input":1326,"output":104,"cacheRead":0,"cacheWrite":0,"totalTokens":1430,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"validation":{"status":"passed","checks":["assistant-message-finalized","non-empty-response","raw-internal-format-guard","json-leak-guard","direct-response-shape","input-echo-guard"],"issues":[],"latencyMs":0}}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.382Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"turn_end"}}
+{"type":"agent_event","timestamp":"2026-05-23T06:09:59.382Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","event":{"type":"agent_end"}}
+{"type":"task_end","timestamp":"2026-05-23T06:09:59.382Z","traceId":"c6925107-f899-4e90-abce-0479abe21ff9","latencyMs":5256,"outcome":"completed"}

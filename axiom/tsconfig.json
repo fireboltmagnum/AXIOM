@@ -1,0 +1,23 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"*": ["./*"],
+			"@axiom/ai": ["./packages/ai/src/index.ts"],
+			"@axiom/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@axiom/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@axiom/ai/dist/*": ["./packages/ai/src/*"],
+			"@axiom/agent-core": ["./packages/agent/src/index.ts"],
+			"@axiom/agent-core/*": ["./packages/agent/src/*"],
+			"@axiom/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@axiom/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
+			"@axiom/coding-agent/*": ["./packages/coding-agent/src/*"],
+			"typebox": ["./node_modules/typebox"],
+			"@axiom/tui": ["./packages/tui/src/index.ts"],
+			"@axiom/tui/*": ["./packages/tui/src/*"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
+	"exclude": ["**/dist/**"]
+}
