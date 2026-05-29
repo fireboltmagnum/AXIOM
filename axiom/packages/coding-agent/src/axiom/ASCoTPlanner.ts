@@ -18,6 +18,7 @@ export class ASCoTPlanner {
 		abstraction: AxiomAbstraction;
 		recalls: AxiomReflectionRecallHit[];
 		enabled: boolean;
+		availableTools?: string[];
 	}): AxiomASCoTPlan {
 		const { classification, recalls, enabled } = options;
 		if (!enabled) {
@@ -25,7 +26,7 @@ export class ASCoTPlanner {
 		}
 
 		const thinkingLevel = pickThinkingLevel(classification);
-		const strategyHints = pickStrategyHints(classification, recalls.length);
+		const strategyHints = pickStrategyHints(classification, recalls.length, options.availableTools ?? []);
 		return { thinkingLevel, strategyHints };
 	}
 }
@@ -49,10 +50,15 @@ function pickThinkingLevel(classification: AxiomTaskClassification): AxiomASCoTP
 	return "minimal";
 }
 
-function pickStrategyHints(classification: AxiomTaskClassification, recallCount: number): string[] {
+function pickStrategyHints(
+	classification: AxiomTaskClassification,
+	recallCount: number,
+	availableTools: string[],
+): string[] {
 	const hints: string[] = [];
 	const c = classification.complexity;
 	const kind = classification.kind;
+	const tools = new Set(availableTools);
 
 	// Top-level reasoning strategy keyed on complexity. Phrased as imperatives the
 	// model can act on directly. Kept short — these become part of the system prompt
@@ -75,6 +81,26 @@ function pickStrategyHints(classification: AxiomTaskClassification, recallCount:
 		hints.push(
 			"For code changes, prefer minimal, surgical edits. Do not refactor untouched code. Run tools (read, rg, edit) when you need to verify state — do not guess at file contents.",
 		);
+		if (tools.has("todo_list") && c >= 51) {
+			hints.push(
+				"For broad coding tasks, create or update a todo_list first, keep each todo atomic, and mark items complete as evidence is collected.",
+			);
+		}
+		if (tools.has("understand_code")) {
+			hints.push(
+				"Use understand_code when you need a fast structural map of unfamiliar files or folders before editing.",
+			);
+		}
+		if (tools.has("code_graph")) {
+			hints.push(
+				"Use code_graph for cross-file dependency questions, symbol relationships, or deciding which files an edit can affect.",
+			);
+		}
+		if (tools.has("flow_graph")) {
+			hints.push(
+				"Use flow_graph for behavior questions: execution paths, data flow, effects, events, errors, failed tests, or command traces.",
+			);
+		}
 	}
 
 	if (recallCount > 0) {

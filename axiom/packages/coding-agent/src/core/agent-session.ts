@@ -13,7 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@axiom/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@axiom/ai";
@@ -26,12 +26,15 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@axiom/ai";
+import { AutoRollback } from "../axiom/AutoRollback.ts";
 import { AXIOMRuntime } from "../axiom/AXIOMRuntime.ts";
 import { BestOfNCoordinator } from "../axiom/BestOfNCoordinator.ts";
 import { GraphExecutionTracker } from "../axiom/GraphExecutionTracker.ts";
+import type { PatchRiskSnapshot } from "../axiom/PatchRiskGate.ts";
 import { RepairLoop } from "../axiom/RepairLoop.ts";
 import type { AxiomTaskClassification, AxiomTaskPlan } from "../axiom/RuntimeTypes.ts";
 import { StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
+import { SubgoalVerifier } from "../axiom/SubgoalVerifier.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -173,6 +176,18 @@ export type AgentSessionEvent =
 			winnerIssueCount: number;
 			regressionDetected: boolean;
 			reason: string;
+	  }
+	| {
+			type: "axiom_auto_rollback";
+			previousIssueCount: number;
+			currentIssueCount: number;
+	  }
+	| {
+			type: "axiom_subgoal_verify_failed";
+			nodeId: string;
+			description: string;
+			claim: string;
+			exitCode: number;
 	  };
 
 /** Listener function for agent session events */
@@ -199,6 +214,13 @@ export interface AgentSessionConfig {
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];
+	/**
+	 * When true, the default built-in tools are disabled (the `noTools` option of
+	 * the SDK, in either "all" or "builtin" mode). AXIOM-managed tools are
+	 * built-ins, so this also suppresses their auto-enablement — only
+	 * extension/custom tools remain active.
+	 */
+	noBuiltinTools?: boolean;
 	/**
 	 * Override base tools (useful for custom runtimes).
 	 *
@@ -333,6 +355,7 @@ export class AgentSession {
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	private _allowedToolNames?: Set<string>;
+	private _noBuiltinTools = false;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
@@ -389,6 +412,7 @@ export class AgentSession {
 	 * turn means we only invoke the verifier ONCE per turn no matter how many
 	 * edits the agent emitted — much cheaper than the previous per-edit run. */
 	private _repairLoopPendingFiles = new Set<string>();
+	private _repairLoopPreEditSnapshots = new Map<string, PatchRiskSnapshot>();
 	/** True when this turn already queued an IP-retry followUp; we suppress the
 	 * repair-loop retry in that case so the agent only gets one followUp per
 	 * turn (the more specific one wins). */
@@ -397,6 +421,14 @@ export class AgentSession {
 	 * and at exhaustion picks the one that converged best. No-op when
 	 * `bestOfN <= 1`. */
 	private _bestOfN = new BestOfNCoordinator();
+	/** Auto-rollback handler: snapshots the working tree after each turn and
+	 * reverts on verifier regression. Constructed lazily when `autoRollback`
+	 * is enabled. */
+	private _autoRollback: AutoRollback | undefined;
+	/** Subgoal verifier: when an atomic reasoning-graph node carries a
+	 * `verifyClaim`, this runs it on node completion and flips false claims
+	 * back to `failed`. Lazy. */
+	private _subgoalVerifier: SubgoalVerifier | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -410,6 +442,7 @@ export class AgentSession {
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
+		this._noBuiltinTools = config.noBuiltinTools ?? false;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		this._axiomRuntime = new AXIOMRuntime({
@@ -495,6 +528,12 @@ export class AgentSession {
 	}
 
 	private _withAxiomManagedTools(toolNames: string[]): string[] {
+		// AXIOM-managed tools (todo_list, understand_code, code_graph, …) are
+		// built-ins. When the default built-in tools are disabled, they must not
+		// be auto-enabled — only extension/custom tools stay active.
+		if (this._noBuiltinTools) {
+			return toolNames;
+		}
 		const next = new Set(toolNames);
 		if (!this._allowedToolNames || this._allowedToolNames.has("todo_list")) {
 			next.add("todo_list");
@@ -584,6 +623,7 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			this._snapshotMutatedFileForRepair(toolCall.name, args);
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				this._recordAxiomGraphToolStart(toolCall.id, toolCall.name);
@@ -633,7 +673,7 @@ export class AgentSession {
 				}
 			}
 
-			const graphNote = this._recordAxiomGraphToolEnd(
+			const graphNote = await this._recordAxiomGraphToolEnd(
 				toolCall.id,
 				toolCall.name,
 				finalIsError,
@@ -662,6 +702,47 @@ export class AgentSession {
 		const changedFile = this._extractMutatedFile(toolName, args);
 		if (!changedFile) return;
 		this._repairLoopPendingFiles.add(changedFile);
+	}
+
+	private _snapshotMutatedFileForRepair(toolName: string, args: unknown): void {
+		const changedFile = this._extractMutatedFile(toolName, args);
+		if (!changedFile || this._repairLoopPreEditSnapshots.has(changedFile)) return;
+		this._repairLoopPreEditSnapshots.set(changedFile, this._readPatchRiskSnapshot(changedFile));
+	}
+
+	private _readPatchRiskSnapshot(file: string): PatchRiskSnapshot {
+		if (!existsSync(file)) return { existed: false };
+		try {
+			if (!statSync(file).isFile()) return { existed: false };
+			const content = readFileSync(file, "utf-8");
+			if (content.includes("\0")) return { existed: true };
+			return { existed: true, content };
+		} catch {
+			return { existed: true };
+		}
+	}
+
+	private _drainRepairLoopPendingFiles(): {
+		changedFiles: string[];
+		preEditSnapshots: Map<string, PatchRiskSnapshot>;
+	} {
+		const changedFiles = [...this._repairLoopPendingFiles];
+		this._repairLoopPendingFiles.clear();
+		const preEditSnapshots = new Map<string, PatchRiskSnapshot>();
+		for (const file of changedFiles) {
+			const snapshot = this._repairLoopPreEditSnapshots.get(file);
+			if (snapshot) preEditSnapshots.set(file, snapshot);
+			this._repairLoopPreEditSnapshots.delete(file);
+		}
+		if (changedFiles.length === 0) {
+			this._repairLoopPreEditSnapshots.clear();
+		}
+		return { changedFiles, preEditSnapshots };
+	}
+
+	private _clearRepairLoopPendingFiles(): void {
+		this._repairLoopPendingFiles.clear();
+		this._repairLoopPreEditSnapshots.clear();
 	}
 
 	private _extractMutatedFile(toolName: string, args: unknown): string | undefined {
@@ -693,20 +774,19 @@ export class AgentSession {
 	 */
 	private async _maybeRunRepairLoopAtTurnEnd(traceId: string | undefined): Promise<void> {
 		if (this._repairLoopStopped || this._repairLoopSuppressForTurn) {
-			this._repairLoopPendingFiles.clear();
+			this._clearRepairLoopPendingFiles();
 			return;
 		}
 		const settings = this.settingsManager.getAxiomSettings();
 		if (!settings.enabled || !settings.repairLoop || settings.repairLoopMaxAttempts <= 0) {
-			this._repairLoopPendingFiles.clear();
+			this._clearRepairLoopPendingFiles();
 			return;
 		}
 		if (this._repairLoopAttempts >= settings.repairLoopMaxAttempts) {
-			this._repairLoopPendingFiles.clear();
+			this._clearRepairLoopPendingFiles();
 			return;
 		}
-		const changedFiles = [...this._repairLoopPendingFiles];
-		this._repairLoopPendingFiles.clear();
+		const { changedFiles, preEditSnapshots } = this._drainRepairLoopPendingFiles();
 		if (changedFiles.length === 0) return;
 
 		const result = await this._repairLoop.run({
@@ -714,6 +794,8 @@ export class AgentSession {
 			timeoutMs: settings.repairLoopTimeoutMs,
 			attempt: this._repairLoopAttempts + 1,
 			maxAttempts: settings.repairLoopMaxAttempts,
+			verifierLadder: settings.benchmarkMode,
+			preEditSnapshots,
 		});
 		if (!result) return;
 
@@ -729,6 +811,10 @@ export class AgentSession {
 			durationMs: result.durationMs,
 			issueCount: result.issues.length,
 			signature: result.signature,
+			patchRiskLevel: result.patchRisk.level,
+			patchRiskScore: result.patchRisk.score,
+			patchRiskBlocked: result.patchRisk.shouldBlock,
+			patchRiskSignalCount: result.patchRisk.signals.length,
 		});
 
 		// Best-of-N: record this attempt as a candidate regardless of pass/fail
@@ -764,10 +850,51 @@ export class AgentSession {
 			});
 		}
 
+		// Auto-rollback: compare against the prior turn's snapshot BEFORE we
+		// advance any other repair-loop state. If we regressed (strictly more
+		// issues than last turn), revert the working tree and tell the agent.
+		// Skip rollback on success: the new state IS the improvement.
+		let rollbackPacket: string | undefined;
+		if (settings.autoRollback && !result.passed) {
+			if (!this._autoRollback) {
+				this._autoRollback = new AutoRollback({ cwd: this._cwd });
+			}
+			const rollback = await this._autoRollback.checkRegression({
+				issueCount: result.issues.length,
+				signature: result.signature,
+			});
+			if (rollback.restored) {
+				rollbackPacket = [
+					"Auto-rollback: your edits regressed the verifier",
+					`(${rollback.previousIssueCount} -> ${rollback.currentIssueCount} issues).`,
+					"The working tree has been restored to the snapshot from the previous successful turn.",
+					"Pick a DIFFERENT approach — repeating the same edit pattern will regress again.",
+				].join(" ");
+				this._emit({
+					type: "axiom_auto_rollback",
+					previousIssueCount: rollback.previousIssueCount,
+					currentIssueCount: rollback.currentIssueCount,
+				});
+			}
+		}
+
 		if (result.passed) {
+			if (this._repairLoopLastSignature) {
+				this._repairLoop.recordSuccessfulRepair(this._repairLoopLastSignature, changedFiles);
+			}
 			this._repairLoopLastSignature = undefined;
 			this._repairLoopRepeatCount = 0;
 			this._repairLoopLastIssueCount = 0;
+			// Snapshot the now-passing state so a later regression can revert here.
+			if (settings.autoRollback) {
+				if (!this._autoRollback) {
+					this._autoRollback = new AutoRollback({ cwd: this._cwd });
+				}
+				await this._autoRollback.snapshotAfterTurn({
+					issueCount: 0,
+					signature: result.signature,
+				});
+			}
 			return;
 		}
 
@@ -855,6 +982,26 @@ export class AgentSession {
 			});
 		}
 
+		// Append the rollback packet, if any, so the agent sees BOTH the
+		// verifier failure AND the "we reverted; pick a different approach"
+		// directive in one followUp. Wrapped in the same hidden sentinel.
+		if (rollbackPacket) {
+			packet = `${packet}\n\n${rollbackPacket}`;
+		}
+
+		// Snapshot the current (failed) state as the new baseline. If the
+		// NEXT turn regresses further, that's the trigger to revert. Snapshot
+		// uses `git stash create` so it's non-destructive.
+		if (settings.autoRollback && !exhaustReason) {
+			if (!this._autoRollback) {
+				this._autoRollback = new AutoRollback({ cwd: this._cwd });
+			}
+			await this._autoRollback.snapshotAfterTurn({
+				issueCount: result.issues.length,
+				signature: result.signature,
+			});
+		}
+
 		// Deliver the packet as a hidden followUp so the model gets a fresh turn
 		// to repair while the user UI filters it out (see isAxiomRepairLoopText).
 		void this.sendUserMessage(packet, { deliverAs: "followUp" }).catch(() => {
@@ -873,17 +1020,56 @@ export class AgentSession {
 		}
 	}
 
-	private _recordAxiomGraphToolEnd(
+	private async _recordAxiomGraphToolEnd(
 		toolCallId: string,
 		toolName: string,
 		isError: boolean,
 		errorText?: string,
-	): string | undefined {
-		const result = this._axiomGraphTracker?.onToolEnd(toolCallId, toolName, isError, errorText);
-		if (!result) {
+	): Promise<string | undefined> {
+		const tracker = this._axiomGraphTracker;
+		const result = tracker?.onToolEnd(toolCallId, toolName, isError, errorText);
+		if (!tracker || !result) {
 			return undefined;
 		}
 		this._axiomRuntime.recordGraphNodeUpdate(this._activeAxiomTraceId, result.update, result.snapshot);
+
+		// Subgoal verification: when an atomic node has just transitioned to
+		// `complete` AND carries a verifyClaim, run the claim and flip the
+		// node back to `failed` if the claim is wrong. Cheap, deterministic,
+		// catches "agent says it implemented X but didn't" failure mode.
+		if (result.update.status !== "complete") return result.note;
+		const node = tracker.getNodeById(result.update.nodeId);
+		if (!node?.verifyClaim) return result.note;
+		if (!this._subgoalVerifier) {
+			this._subgoalVerifier = new SubgoalVerifier({ cwd: this._cwd });
+		}
+		const verifyResult = await this._subgoalVerifier.verify(node);
+		if (!verifyResult.checked) return result.note;
+		tracker.applyVerification(node.id, {
+			passed: verifyResult.passed ?? false,
+			exitCode: verifyResult.exitCode ?? -1,
+			stderrTail: verifyResult.stderrTail,
+		});
+		// Re-snapshot after the status flip so the next subgoal selection
+		// sees the corrected state (failed nodes don't unblock dependents).
+		const refreshedSnapshot = tracker.snapshot();
+		this._axiomRuntime.recordGraphNodeUpdate(
+			this._activeAxiomTraceId,
+			{ ...result.update, status: verifyResult.passed ? "complete" : "failed" },
+			refreshedSnapshot,
+		);
+		if (!verifyResult.passed) {
+			this._emit({
+				type: "axiom_subgoal_verify_failed",
+				nodeId: node.id,
+				description: node.description,
+				claim: node.verifyClaim,
+				exitCode: verifyResult.exitCode ?? -1,
+			});
+			// Inject a hint into the existing note so the agent sees the bad claim.
+			const augmented = `${result.note}\n<axiom_subgoal_verify>Node ${node.id} claimed complete but verifyClaim FAILED (exit ${verifyResult.exitCode}). Fix the underlying problem, then redo the action. Claim: \`${node.verifyClaim}\`</axiom_subgoal_verify>`;
+			return augmented;
+		}
 		return result.note;
 	}
 
@@ -1134,8 +1320,20 @@ export class AgentSession {
 			// the streaming feedback is more useful and there's already a follow-up
 			// pending in the queue.
 			const streamingAlreadyHandled = this._axiomStreamAbortPending;
+			// Base-retry suppression: a transient provider error/abort (overloaded,
+			// rate limit, network drop, …) ends the message with `stopReason: "error"`
+			// and is owned by the auto-retry subsystem (`_handlePostAgentRun`). The IP
+			// validator flags the same message as `provider-stop-error` and would queue
+			// its own follow-up turn, double-retrying every transient failure. Defer to
+			// the base retry — content validation has nothing to add to a transport error.
+			const baseRetryWillHandle = this._isRetryableError(assistantMsg);
 			let ipRetryQueued = false;
-			if (validation?.status === "failed" && validation.agentFeedback && !streamingAlreadyHandled) {
+			if (
+				validation?.status === "failed" &&
+				validation.agentFeedback &&
+				!streamingAlreadyHandled &&
+				!baseRetryWillHandle
+			) {
 				const errorIssues = validation.issues.filter((i) => i.severity === "error");
 				const maxRetries = this.settingsManager.getAxiomSettings().ipMaxRetries;
 				const lastAttempt = !(maxRetries > 0 && this._axiomIPRetryCount < maxRetries);
@@ -1183,7 +1381,7 @@ export class AgentSession {
 			// IP-retry followUp this turn (the agent gets one followUp per turn,
 			// and a real IP/syntax problem is more urgent than a verifier
 			// failure that the IP fix may itself resolve).
-			this._repairLoopSuppressForTurn = ipRetryQueued || streamingAlreadyHandled;
+			this._repairLoopSuppressForTurn = ipRetryQueued || streamingAlreadyHandled || baseRetryWillHandle;
 			void this._maybeRunRepairLoopAtTurnEnd(traceId).catch(() => {
 				// Swallow: repair-loop errors must never break the agent loop.
 			});
@@ -1614,9 +1812,10 @@ export class AgentSession {
 		this._repairLoopRepeatCount = 0;
 		this._repairLoopLastIssueCount = 0;
 		this._repairLoopStopped = false;
-		this._repairLoopPendingFiles.clear();
+		this._clearRepairLoopPendingFiles();
 		this._repairLoopSuppressForTurn = false;
 		this._bestOfN.reset();
+		this._autoRollback?.reset();
 		this._axiomRuntime.startTrace({
 			traceId,
 			sessionId: this.sessionId,
@@ -1708,6 +1907,12 @@ export class AgentSession {
 				this._axiomRuntime.recordSkillOutcome(trace?.id, "failure", recalledIds);
 			}
 		}
+		if (this._activeAxiomPlan?.contextLedger) {
+			this._axiomRuntime.recordContextLedgerOutcome(
+				trace?.id,
+				outcome === "completed" && this._axiomIPRetryCount === 0 ? "success" : "failure",
+			);
+		}
 
 		this._axiomRuntime.finishTrace(trace?.id, trace?.startedAt ?? Date.now(), outcome);
 		if (trace?.id === this._activeAxiomTraceId) {
@@ -1727,6 +1932,7 @@ export class AgentSession {
 			this._repairLoopRepeatCount = 0;
 			this._repairLoopLastIssueCount = 0;
 			this._repairLoopStopped = false;
+			this._clearRepairLoopPendingFiles();
 		}
 	}
 

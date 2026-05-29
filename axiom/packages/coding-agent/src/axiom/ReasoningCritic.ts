@@ -94,10 +94,48 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 	});
 }
 
+function heuristicScores(candidates: AxiomReasoningCandidate[]): Map<string, CriticScore> {
+	const out = new Map<string, CriticScore>();
+	for (const candidate of candidates) {
+		const text = `${candidate.summary} ${candidate.pros ?? ""} ${candidate.cons ?? ""}`.toLowerCase();
+		const vaguePenalty = countMatches(
+			text,
+			/\b(optimi[sz]e|improve|handle|manage|support|integrate|enhance|stuff|things)\b/g,
+		);
+		const toolBonus = /\b(read|rg|ripgrep|test|check|flow_graph|code_graph|understand_code|repair)\b/.test(text)
+			? 1
+			: 0;
+		const verifyBonus = /\b(test|verify|check|lint|typecheck|smoke|assert)\b/.test(text) ? 1 : 0;
+		const reversibleBonus = /\b(minimal|surgical|small|targeted|rollback|undo|isolated)\b/.test(text) ? 1 : 0;
+		const risk = typeof candidate.risk === "number" ? candidate.risk : 5;
+		const completeness = typeof candidate.completeness === "number" ? candidate.completeness : 5;
+		const feasibility = typeof candidate.feasibility === "number" ? candidate.feasibility : 5;
+		const cost = Math.min(10, Math.max(1, Math.round(7 - toolBonus + vaguePenalty + Math.max(0, risk - 6) / 2)));
+		const coverage = Math.min(10, Math.max(1, Math.round(completeness + verifyBonus - vaguePenalty)));
+		const undoability = Math.min(
+			10,
+			Math.max(1, Math.round(feasibility + reversibleBonus - Math.max(0, risk - 5) / 2)),
+		);
+		out.set(candidate.id, {
+			id: candidate.id,
+			cost,
+			coverage,
+			undoability,
+			score: coverage + undoability - cost,
+			rationale: "Heuristic critic fallback: scored specificity, verifier use, estimated risk, and reversibility.",
+		});
+	}
+	return out;
+}
+
+function countMatches(text: string, re: RegExp): number {
+	return text.match(re)?.length ?? 0;
+}
+
 export class ReasoningCritic {
 	/**
-	 * Score a batch of candidates. Returns a map keyed by candidate id. Empty map
-	 * on any failure (timeout, parse error, missing fields).
+	 * Score a batch of candidates. Uses the LLM critic when available and falls
+	 * back to a deterministic local scorer on timeout/parse/provider failure.
 	 */
 	async score(options: {
 		task: string;
@@ -106,6 +144,7 @@ export class ReasoningCritic {
 	}): Promise<Map<string, CriticScore>> {
 		const empty = new Map<string, CriticScore>();
 		if (options.candidates.length === 0) return empty;
+		const fallback = () => heuristicScores(options.candidates);
 		try {
 			const userPayload = JSON.stringify({
 				task: options.task,
@@ -127,15 +166,16 @@ export class ReasoningCritic {
 				),
 				options.llm.timeoutMs,
 			);
-			if (!result) return empty;
+			if (!result) return fallback();
 			const text = result.content
 				.filter((p): p is { type: "text"; text: string } => p.type === "text")
 				.map((p) => p.text)
 				.join("")
 				.trim();
-			return this.parse(text);
+			const parsed = this.parse(text);
+			return parsed.size > 0 ? parsed : fallback();
 		} catch {
-			return empty;
+			return fallback();
 		}
 	}
 

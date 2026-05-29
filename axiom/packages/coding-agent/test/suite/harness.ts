@@ -101,7 +101,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionManager = SessionManager.inMemory();
-	const settingsManager = SettingsManager.inMemory(options.settings);
+	// Characterization tests target base AgentSession behavior, so AXIOM's
+	// difficulty router / local fast path / pre-stream planning is disabled by
+	// default — otherwise trivial prompts get answered locally (never reaching
+	// the faux model) and pre-stream planning shifts streaming-start timing.
+	// Tests that exercise AXIOM opt in via `settings: { axiom: { enabled: true } }`.
+	const settingsManager = SettingsManager.inMemory({ axiom: { enabled: false }, ...options.settings });
 
 	const authStorage = AuthStorage.inMemory();
 	if (withConfiguredAuth) {

@@ -38,7 +38,9 @@ import { SparseTreeGrepStore } from "./SparseTreeGrepStore.ts";
  *   3. Lets us swap the backing storage later (e.g., to a real graph DB) with
  *      no surface-area churn.
  *
- * Grep-only retrieval (per project rule: no embeddings, no LightRAG).
+ * Retrieval stays local and deterministic where possible. SparseTreeGrep may
+ * add optional local embeddings for long-document reranking when the optional
+ * embedder dependency is installed; it falls back to lexical search otherwise.
  */
 export class ContextAgent {
 	private readonly reflexion: ReflexionStore;
@@ -170,7 +172,7 @@ export class ContextAgent {
 	 * three `limit*` knobs). All results are best-effort — failures of the
 	 * underlying stores degrade silently to empty arrays.
 	 */
-	recall(options: {
+	async recall(options: {
 		keywords: string[];
 		taskKind: string;
 		limitReflections: number;
@@ -181,7 +183,7 @@ export class ContextAgent {
 		limitKnowledgeGraph: number;
 		limitSparseTreeGrep: number;
 		limitConcepts: number;
-	}): {
+	}): Promise<{
 		reflections: AxiomReflectionRecallHit[];
 		skills: AxiomSkillRecallHit[];
 		understandings: AxiomUnderstandingRecallHit[];
@@ -190,7 +192,7 @@ export class ContextAgent {
 		knowledge: AxiomKnowledgeGraphHit[];
 		sparseTreeGrep: AxiomSparseTreeGrepHit[];
 		concepts: AxiomConceptSummary[];
-	} {
+	}> {
 		const {
 			keywords,
 			taskKind,
@@ -221,7 +223,9 @@ export class ContextAgent {
 		const knowledge = limitKnowledgeGraph > 0 ? this.knowledge.search(keywords.join(" "), limitKnowledgeGraph) : [];
 
 		const sparseTreeGrep =
-			limitSparseTreeGrep > 0 ? this.sparseTreeGrep.search(keywords.join(" "), { limit: limitSparseTreeGrep }) : [];
+			limitSparseTreeGrep > 0
+				? await this.sparseTreeGrep.searchReranked(keywords.join(" "), { limit: limitSparseTreeGrep })
+				: [];
 
 		const concepts = limitConcepts > 0 ? this.aggregateConcepts({ keywords, limit: limitConcepts }) : [];
 

@@ -103,14 +103,30 @@ export function analyzeFile(path: string, source: string): AxiomFileUnderstandin
 			break;
 	}
 
+	const dedupedSymbols = dedupeSymbols(symbols);
 	return {
 		path,
 		language,
 		lineCount: lines.length,
-		symbols: symbols.map((s) => ({ ...s, signature: s.signature ? truncateSignature(s.signature) : undefined })),
+		symbols: dedupedSymbols.map((s) => ({
+			...s,
+			signature: s.signature ? truncateSignature(s.signature) : undefined,
+		})),
 		imports: [...imports].sort(),
 		exports: [...exports].sort(),
 	};
+}
+
+function dedupeSymbols(symbols: RawSymbol[]): RawSymbol[] {
+	const seen = new Set<string>();
+	const out: RawSymbol[] = [];
+	for (const symbol of symbols) {
+		const key = `${symbol.kind}:${symbol.name}:${symbol.line}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(symbol);
+	}
+	return out;
 }
 
 function truncateSignature(sig: string): string {
@@ -128,34 +144,99 @@ function scanTsJs(
 	addImport: (m: string) => void,
 	addExport: (n: string) => void,
 ): void {
+	let braceDepth = 0;
+	let activeClass: { name: string; baseDepth: number } | undefined;
 	for (let i = 0; i < lines.length; i++) {
 		const raw = lines[i];
 		const line = raw.trim();
-		if (!line || line.startsWith("//") || line.startsWith("*")) continue;
 		const lineNum = i + 1;
+		if (!line || line.startsWith("//") || line.startsWith("*")) {
+			braceDepth += braceDelta(raw);
+			if (activeClass && braceDepth <= activeClass.baseDepth) activeClass = undefined;
+			continue;
+		}
 
 		// import ... from "module"
 		const importMatch = /^import\s+(?:[^"';]+\s+from\s+)?["']([^"']+)["']/.exec(line);
 		if (importMatch) {
 			addImport(importMatch[1]);
+			braceDepth += braceDelta(raw);
+			continue;
+		}
+		const exportFromMatch = /^export\s+(?:\{[^}]+\}|\*)\s+from\s+["']([^"']+)["']/.exec(line);
+		if (exportFromMatch) {
+			addImport(exportFromMatch[1]);
+			const names = /\{([^}]+)\}/.exec(line)?.[1];
+			if (names) {
+				for (const part of names.split(",")) {
+					const name = part
+						.trim()
+						.split(/\s+as\s+/)
+						.pop()
+						?.trim();
+					if (name) addExport(name);
+				}
+			}
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 
 		const exported = /^export\b/.test(line);
 		const stripped = line.replace(/^export\s+(?:default\s+)?(?:async\s+)?/, "");
 
+		if (activeClass && braceDepth > activeClass.baseDepth) {
+			const method = extractTsJsMethod(line);
+			if (method) {
+				add({
+					kind: "method",
+					name: `${activeClass.name}.${method}`,
+					line: lineNum,
+					signature: raw,
+					exported,
+				});
+			}
+		}
+
+		if (braceDepth > 0) {
+			braceDepth += braceDelta(raw);
+			if (activeClass && braceDepth <= activeClass.baseDepth) activeClass = undefined;
+			continue;
+		}
+
 		// function name(...)
 		let m: RegExpExecArray | null = /^function\s+([A-Za-z_$][\w$]*)\s*[<(]/.exec(stripped);
+		const anonymousDefaultFunction = !m && /^(?:async\s+)?function\s*\(/.test(stripped);
+		if (anonymousDefaultFunction) {
+			add({ kind: "function", name: "default", line: lineNum, signature: raw, exported });
+			if (exported) addExport("default");
+			braceDepth += braceDelta(raw);
+			continue;
+		}
 		if (m) {
 			add({ kind: "function", name: m[1], line: lineNum, signature: raw, exported });
 			if (exported) addExport(m[1]);
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 		// class Name
 		m = /^(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/.exec(stripped);
+		const anonymousDefaultClass = !m && /^(?:abstract\s+)?class(?:\s+extends|\s*\{)/.test(stripped);
+		if (anonymousDefaultClass) {
+			add({ kind: "class", name: "default", line: lineNum, signature: raw, exported });
+			if (exported) addExport("default");
+			if (line.includes("{")) {
+				activeClass = { name: "default", baseDepth: braceDepth };
+			}
+			braceDepth += braceDelta(raw);
+			continue;
+		}
 		if (m) {
 			add({ kind: "class", name: m[1], line: lineNum, signature: raw, exported });
 			if (exported) addExport(m[1]);
+			if (line.includes("{")) {
+				activeClass = { name: m[1], baseDepth: braceDepth };
+			}
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 		// interface Name
@@ -163,6 +244,7 @@ function scanTsJs(
 		if (m) {
 			add({ kind: "interface", name: m[1], line: lineNum, signature: raw, exported });
 			if (exported) addExport(m[1]);
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 		// type Alias =
@@ -170,6 +252,7 @@ function scanTsJs(
 		if (m) {
 			add({ kind: "type", name: m[1], line: lineNum, signature: raw, exported });
 			if (exported) addExport(m[1]);
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 		// enum Name
@@ -177,13 +260,21 @@ function scanTsJs(
 		if (m) {
 			add({ kind: "enum", name: m[1], line: lineNum, signature: raw, exported });
 			if (exported) addExport(m[1]);
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 		// const/let/var Name = ...
-		m = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/.exec(stripped);
+		m = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[^=]*=\s*(.*)$/.exec(stripped);
 		if (m) {
-			add({ kind: "const", name: m[1], line: lineNum, signature: raw, exported });
+			add({
+				kind: isFunctionLikeInitializer(m[2]) ? "function" : "const",
+				name: m[1],
+				line: lineNum,
+				signature: raw,
+				exported,
+			});
 			if (exported) addExport(m[1]);
+			braceDepth += braceDelta(raw);
 			continue;
 		}
 
@@ -199,7 +290,54 @@ function scanTsJs(
 				if (name) addExport(name);
 			}
 		}
+		braceDepth += braceDelta(raw);
+		if (activeClass && braceDepth <= activeClass.baseDepth) activeClass = undefined;
 	}
+}
+
+function isFunctionLikeInitializer(rhs: string): boolean {
+	const trimmed = rhs.trim();
+	return (
+		/^(?:async\s+)?function\b/.test(trimmed) ||
+		/^(?:async\s+)?\([^)]*\)\s*(?::\s*[^=]+)?=>/.test(trimmed) ||
+		/^(?:async\s+)?[A-Za-z_$][\w$]*\s*=>/.test(trimmed)
+	);
+}
+
+function extractTsJsMethod(line: string): string | undefined {
+	if (/^(if|for|while|switch|catch|function|return|const|let|var)\b/.test(line)) return undefined;
+	const normalized = line.replace(
+		/^(public|private|protected|static|async|override|readonly|abstract|get|set)\s+/g,
+		"",
+	);
+	const method =
+		/^(constructor|[A-Za-z_$][\w$]*)\s*(?:<[^>]+>)?\s*\(/.exec(normalized)?.[1] ??
+		/^([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/.exec(normalized)?.[1];
+	return method;
+}
+
+function braceDelta(line: string): number {
+	let delta = 0;
+	let inString: '"' | "'" | "`" | undefined;
+	for (let i = 0; i < line.length; i++) {
+		const ch = line[i];
+		if (inString) {
+			if (ch === "\\") {
+				i++;
+				continue;
+			}
+			if (ch === inString) inString = undefined;
+			continue;
+		}
+		if (ch === '"' || ch === "'" || ch === "`") {
+			inString = ch;
+			continue;
+		}
+		if (ch === "/" && line[i + 1] === "/") break;
+		if (ch === "{") delta++;
+		else if (ch === "}") delta--;
+	}
+	return delta;
 }
 
 // ---------------------------------------------------------------------------

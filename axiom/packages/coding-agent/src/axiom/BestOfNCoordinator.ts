@@ -98,8 +98,14 @@ export class BestOfNCoordinator {
 	}
 }
 
-/** Lower is better. Returns negative when a should sort before b. */
-function compareCandidates(a: BestOfNCandidate, b: BestOfNCandidate): number {
+/**
+ * Lower is better. Returns negative when a should sort before b.
+ *
+ * Exported so parallel-rollout selection (RolloutCoordinator) ranks candidates
+ * with the EXACT same criterion as sequential repair-attempt selection — there
+ * must be one source of truth for "which candidate is best".
+ */
+export function compareCandidates(a: BestOfNCandidate, b: BestOfNCandidate): number {
 	// 1. Passed > failed.
 	if (a.passed !== b.passed) return a.passed ? -1 : 1;
 	// 2. Fewer parsed issues.
@@ -113,6 +119,18 @@ function compareCandidates(a: BestOfNCandidate, b: BestOfNCandidate): number {
 	// 5. Earlier rollout / attempt (stable preference for original attempt).
 	if (a.rolloutIndex !== b.rolloutIndex) return a.rolloutIndex - b.rolloutIndex;
 	return a.attemptIndex - b.attemptIndex;
+}
+
+/**
+ * Pure selection over an unordered candidate set (e.g. parallel rollouts where
+ * there is no meaningful "last" attempt). Returns the strongest candidate by
+ * {@link compareCandidates}, or undefined when the set is empty. Order-independent:
+ * the comparator is a total order, so recording/arrival order never changes the
+ * winner.
+ */
+export function selectBestCandidate(candidates: readonly BestOfNCandidate[]): BestOfNCandidate | undefined {
+	if (candidates.length === 0) return undefined;
+	return [...candidates].sort(compareCandidates)[0];
 }
 
 function explainSelection(winner: BestOfNCandidate, last: BestOfNCandidate, regressionDetected: boolean): string {

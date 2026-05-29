@@ -298,10 +298,38 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "axiom-context-ledger",
+				label: "AXIOM ContextLedger",
+				description: "Track context ROI and suppress repeated low-value recall",
+				currentValue: config.axiom.contextLedger ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "axiom-benchmark-mode",
+				label: "AXIOM BenchmarkMode",
+				description: "Use benchmark-style localization, minimal patches, and verifier ladders",
+				currentValue: config.axiom.benchmarkMode ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "axiom-repair-loop",
 				label: "AXIOM RepairLoop",
 				description: "Run the cheapest verifier after code edits and feed failures back",
 				currentValue: config.axiom.repairLoop ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "axiom-auto-retrieval",
+				label: "AXIOM Auto-retrieval",
+				description: "Inject a ripgrep+graph structural brief at task start (Aider-style repo-map)",
+				currentValue: config.axiom.autoRetrieval ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "axiom-auto-rollback",
+				label: "AXIOM Auto-rollback",
+				description: "Snapshot working tree per turn; revert when verifier regresses",
+				currentValue: config.axiom.autoRollback ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
@@ -605,8 +633,20 @@ export class SettingsSelectorComponent extends Container {
 					case "axiom-sparse-tree-grep":
 						callbacks.onAxiomFeatureChange("sparseTreeGrep", newValue === "true");
 						break;
+					case "axiom-context-ledger":
+						callbacks.onAxiomFeatureChange("contextLedger", newValue === "true");
+						break;
+					case "axiom-benchmark-mode":
+						callbacks.onAxiomFeatureChange("benchmarkMode", newValue === "true");
+						break;
 					case "axiom-repair-loop":
 						callbacks.onAxiomFeatureChange("repairLoop", newValue === "true");
+						break;
+					case "axiom-auto-retrieval":
+						callbacks.onAxiomFeatureChange("autoRetrieval", newValue === "true");
+						break;
+					case "axiom-auto-rollback":
+						callbacks.onAxiomFeatureChange("autoRollback", newValue === "true");
 						break;
 					case "axiom-playwright-cli":
 						callbacks.onAxiomFeatureChange("playwrightCli", newValue === "true");

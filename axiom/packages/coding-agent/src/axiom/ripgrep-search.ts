@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { ensureTool } from "../utils/tools-manager.ts";
 
 /**
@@ -20,6 +22,15 @@ export interface RipgrepFileHit {
 	file: string;
 	/** Number of matching lines in this file. */
 	matchCount: number;
+	/** File size in bytes (0 if unreadable). Used by density scoring. */
+	bytes: number;
+	/**
+	 * Density score: matchCount / log2(bytes + 2). Punishes huge files that
+	 * happen to mention the term once and rewards small files that mention it
+	 * multiple times. Pure number; consumer is free to combine with other
+	 * signals (graph centrality, recency) before final ranking.
+	 */
+	density: number;
 }
 
 export interface RipgrepLineHit {
@@ -107,9 +118,20 @@ export async function rankFilesByLexicalMatches(options: {
 		const file = line.slice(0, idx);
 		const count = Number.parseInt(line.slice(idx + 1), 10);
 		if (!file || !Number.isFinite(count) || count <= 0) continue;
-		hits.push({ file, matchCount: count });
+		// File-size-aware density: a small file with 3 hits should outrank a
+		// huge file with 4 hits. log2 instead of raw bytes so the penalty is
+		// proportional, not punishing (a 100KB and 200KB file score similarly).
+		let bytes = 0;
+		try {
+			bytes = statSync(resolvePath(options.cwd, file)).size;
+		} catch {
+			// stat failed (race / symlink / perms) — treat as unknown size.
+		}
+		const density = count / Math.log2(Math.max(bytes, 0) + 2);
+		hits.push({ file, matchCount: count, bytes, density });
 	}
-	hits.sort((a, b) => b.matchCount - a.matchCount || a.file.localeCompare(b.file));
+	// Primary sort by density, tiebreak by raw match count, then path for stability.
+	hits.sort((a, b) => b.density - a.density || b.matchCount - a.matchCount || a.file.localeCompare(b.file));
 	return hits.slice(0, Math.max(0, options.maxFiles));
 }
 

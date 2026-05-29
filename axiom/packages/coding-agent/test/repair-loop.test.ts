@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CodeGraphStore } from "../src/axiom/CodeGraphStore.ts";
+import { FailureFingerprintStore } from "../src/axiom/FailureFingerprintStore.ts";
 import { FlowGraphStore } from "../src/axiom/FlowGraphStore.ts";
 import { AXIOM_REPAIR_LOOP_TAG, parseRepairIssues, RepairLoop } from "../src/axiom/RepairLoop.ts";
 
@@ -48,6 +49,96 @@ describe("RepairLoop", () => {
 		expect(verifier?.kind).toBe("playwright");
 		expect(verifier?.command).toContain("playwright test");
 		expect(verifier?.command).toContain("tests/login.spec.ts");
+	});
+
+	it("prefers targeted Vitest checks for changed unit specs", () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({
+				scripts: { test: "vitest run", typecheck: "tsc" },
+				devDependencies: { vitest: "1.0.0" },
+			}),
+		);
+		writeFileSync(join(testDir, "src", "math.test.ts"), "import { test } from 'vitest';\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const verifier = loop.detectVerifier([join(testDir, "src", "math.test.ts")]);
+
+		expect(verifier?.kind).toBe("javascript-test");
+		expect(verifier?.command).toContain("vitest run");
+		expect(verifier?.command).toContain("src/math.test.ts");
+	});
+
+	it("finds a nearby targeted unit spec for changed source files", () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({
+				scripts: { test: "jest", typecheck: "tsc" },
+				devDependencies: { jest: "29.0.0" },
+			}),
+		);
+		writeFileSync(join(testDir, "src", "math.ts"), "export const add = (a: number, b: number) => a + b;\n");
+		writeFileSync(join(testDir, "src", "math.test.ts"), "test('add', () => {});\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const verifier = loop.detectVerifier([join(testDir, "src", "math.ts")]);
+
+		expect(verifier?.kind).toBe("javascript-test");
+		expect(verifier?.command).toContain("jest");
+		expect(verifier?.command).toContain("src/math.test.ts");
+	});
+
+	it("builds a benchmark verifier ladder from targeted to broader checks", () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({
+				scripts: { typecheck: "tsc", test: "vitest run" },
+				devDependencies: { vitest: "1.0.0" },
+			}),
+		);
+		writeFileSync(join(testDir, "src", "math.ts"), "export const add = (a: number, b: number) => a + b;\n");
+		writeFileSync(join(testDir, "src", "math.test.ts"), "import { test } from 'vitest';\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const verifiers = loop.detectVerifierSequence([join(testDir, "src", "math.ts")]);
+
+		expect(verifiers.map((verifier) => verifier.command)).toEqual([
+			expect.stringContaining("vitest run"),
+			"npm run typecheck",
+			"npm run test",
+		]);
+	});
+
+	it("runs the verifier ladder until a broader verifier fails", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node typecheck.js", test: "node test.js" } }, null, 2),
+		);
+		writeFileSync(join(testDir, "typecheck.js"), "process.exit(0);\n");
+		writeFileSync(
+			join(testDir, "test.js"),
+			"console.error(\"src/a.ts(2,10): error TS2304: Cannot find name 'missing'.\"); process.exit(2);\n",
+		);
+		writeFileSync(join(testDir, "src", "a.ts"), "export function run() {\n  return missing;\n}\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const result = await loop.run({
+			changedFiles: [join(testDir, "src", "a.ts")],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+			verifierLadder: true,
+		});
+
+		expect(result?.passed).toBe(false);
+		expect(result?.verifier.command).toBe("npm run test");
+		expect(result?.passedVerifiers.map((verifier) => verifier.command)).toEqual(["npm run typecheck"]);
+		expect(result?.packet).toContain("Verifier ladder:");
+		expect(result?.packet).toContain("Passed before failure: npm run typecheck");
 	});
 
 	it("parses TypeScript verifier failures with exact locations", () => {
@@ -99,6 +190,138 @@ describe("RepairLoop", () => {
 		expect(result?.packet).toContain(AXIOM_REPAIR_LOOP_TAG);
 		expect(result?.packet).toContain("AXIOM RepairLoop verifier failed after a code edit.");
 		expect(result?.packet).toContain("src/a.ts:2:10 in function run");
+		expect(result?.packet).toContain("Failure Source Pack:");
+		expect(result?.packet).toContain("nearby symbols: function run@1");
+		expect(result?.packet).toContain("> 2 |   return missing;");
+	});
+
+	it("ranks likely root-cause failures above earlier symptom locations", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node verify.js" } }, null, 2),
+		);
+		writeFileSync(
+			join(testDir, "verify.js"),
+			[
+				"console.error(\"src/unrelated.ts(10,3): error TS2322: Type 'string' is not assignable to type 'number'.\");",
+				"console.error(\"src/a.ts(2,10): error TS2304: Cannot find name 'missing'.\");",
+				"process.exit(2);",
+			].join("\n"),
+		);
+		writeFileSync(join(testDir, "src", "unrelated.ts"), `${"\n".repeat(9)}export const unrelated = 1;\n`);
+		writeFileSync(join(testDir, "src", "a.ts"), "export function run() {\n  return missing;\n}\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const result = await loop.run({
+			changedFiles: [join(testDir, "src", "a.ts")],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+		});
+
+		expect(result?.issues[0]).toMatchObject({
+			file: "src/a.ts",
+			line: 2,
+			rankReasons: expect.arrayContaining(["changed file", "missing symbol/import"]),
+		});
+		expect(result?.packet).toContain("Root-cause priority:");
+		expect(result?.packet).toContain("src/a.ts:2:10: score");
+		expect(result?.packet).toContain("changed file");
+	});
+
+	it("blocks risky test weakening even when the verifier exits zero", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node verify.js" } }, null, 2),
+		);
+		writeFileSync(join(testDir, "verify.js"), "process.exit(0);\n");
+		const testFile = join(testDir, "src", "a.test.ts");
+		const before = "it('works', () => {\n  expect(1).toBe(1);\n});\n";
+		writeFileSync(testFile, "it.skip('works', () => {\n  expect(1).toBe(1);\n});\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const result = await loop.run({
+			changedFiles: [testFile],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+			preEditSnapshots: new Map([[testFile, { existed: true, content: before }]]),
+		});
+
+		expect(result?.exitCode).toBe(0);
+		expect(result?.passed).toBe(false);
+		expect(result?.patchRisk.shouldBlock).toBe(true);
+		expect(result?.packet).toContain("AXIOM Patch Risk Gate blocked a risky code edit");
+		expect(result?.packet).toContain("Introduced skipped or exclusive tests");
+	});
+
+	it("recalls repeated verifier failures through FailureFingerprintIndex", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node verify.js" } }, null, 2),
+		);
+		writeFileSync(
+			join(testDir, "verify.js"),
+			"console.error(\"src/a.ts(2,10): error TS2304: Cannot find name 'missing'.\"); process.exit(2);\n",
+		);
+		writeFileSync(join(testDir, "src", "a.ts"), "export function run() {\n  return missing;\n}\n");
+		const failureStore = new FailureFingerprintStore(join(testDir, ".stores", "failures"));
+		const loop = new RepairLoop({
+			cwd: testDir,
+			failureFingerprintStore: failureStore,
+		});
+
+		const first = await loop.run({
+			changedFiles: [join(testDir, "src", "a.ts")],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+		});
+		const second = await loop.run({
+			changedFiles: [join(testDir, "src", "a.ts")],
+			timeoutMs: 3000,
+			attempt: 2,
+			maxAttempts: 2,
+		});
+
+		expect(first?.memoryHints).toHaveLength(0);
+		expect(second?.memoryHints[0]?.entry.occurrences).toBe(2);
+		expect(second?.packet).toContain("FailureFingerprintIndex recalls");
+		expect(second?.packet).toContain("typescript failure at src/a.ts:2:10");
+	});
+
+	it("marks a previous failure fingerprint as resolved after a later passing verifier", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node verify.js" } }, null, 2),
+		);
+		writeFileSync(
+			join(testDir, "verify.js"),
+			"console.error(\"src/a.ts(2,10): error TS2304: Cannot find name 'missing'.\"); process.exit(2);\n",
+		);
+		writeFileSync(join(testDir, "src", "a.ts"), "export function run() {\n  return missing;\n}\n");
+		const failureStore = new FailureFingerprintStore(join(testDir, ".stores", "failures"));
+		const loop = new RepairLoop({
+			cwd: testDir,
+			failureFingerprintStore: failureStore,
+		});
+
+		const failed = await loop.run({
+			changedFiles: [join(testDir, "src", "a.ts")],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+		});
+		expect(failed?.signature).toBeTruthy();
+		loop.recordSuccessfulRepair(failed?.signature ?? "", [join(testDir, "src", "a.ts")]);
+
+		const entry = failureStore.all()[0];
+		expect(entry?.resolvedCount).toBe(1);
+		expect(entry?.repairHints[0]).toContain("resolved this fingerprint");
 	});
 
 	it("reports a passing verifier", async () => {

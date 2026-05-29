@@ -77,12 +77,50 @@ Use the AXIOM tools deliberately. They are meant to reduce guessing before edits
 - Use `flow_graph action=debug` or `action=trace` only when running the command/test is useful and acceptable. These actions execute the command with a timeout, capture stdout/stderr, parse stack frames, and map failures back to saved flow graph nodes.
 - `flow_graph` currently provides static flow plus command debug traces. It is not yet a full runtime instrumentation timeline; do not claim it proves every runtime branch unless the command trace actually observed it.
 
+### `sparse_tree_grep`
+
+- Use `sparse_tree_grep` for long non-code documents such as books, PDFs, transcripts, research notes, logs, and design docs.
+- Do not use `sparse_tree_grep` for source code. Use `rg`, `read`, `understand_code`, `code_graph`, and `flow_graph` for code.
+- Use `sparse_tree_grep action=compile` before answering detailed questions about a long document that has not been indexed yet. `compile` builds the expandable JSON tree with chunks, byte ranges, line/page markers, lightweight summaries, keywords, entities, phrases, and optional local embeddings.
+- Use `sparse_tree_grep action=search` to cheaply find candidate scenes/sections across the compiled JSON tree before reading exact text. Search uses entity, phrase, action-signal, lexical, and optional embedding reranking, so it can find paraphrases like "fight scene" matching "gunfight" or "brawl".
+- Use `sparse_tree_grep action=expand` when a root node looks relevant but the exact occurrence is still unclear. Expanding shows child nodes and occurrence locations without loading large source text.
+- Use `sparse_tree_grep action=describe` on the best candidate `chunkId` or `nodeId` before extraction when there are multiple similar hits. `describe` lazily creates/stores compact scene or section descriptions for only the promising chunks, including entities, actions, settings, evidence sentences, and neighboring chunks.
+- Use `sparse_tree_grep action=extract` only after search/expand/describe has narrowed the target. Extract exact source text before quoting, summarizing a specific passage, or making fine-grained claims.
+- Preferred workflow for "find the fight scene between Anna and Gosh": `compile` the book if needed, `search` the natural-language query, `describe` the top few candidate chunks, then `extract` the exact chunk that matches.
+
+### RepairLoop + FailureFingerprintIndex
+
+- RepairLoop runs automatically after code edits when AXIOM settings enable it. Do not manually trigger broad verification before the automatic loop has a chance to run.
+- When RepairLoop reports `FailureFingerprintIndex recalls`, treat them as prior failure-memory hints. They can identify repeated compiler/test/runtime failure shapes and previous repair paths that later passed.
+- Use the recalled hint only when it matches the current parsed failure. Exact source, current stack traces, and current verifier output override old memory.
+- If a fingerprint says a previous repair passed after touching specific files, inspect those files and the current failing owner before editing. Do not blindly replay the old fix.
+- Repeated fingerprint hits mean the problem shape is recurring; prefer the smallest owner-local repair and avoid broad rewrites.
+
+### ContextLedger
+
+- ContextLedger is internal context hygiene. It records which Context Agent recall items were injected, how many tokens they cost, and whether the task later succeeded or failed.
+- When enabled, ContextLedger may suppress repeated low-ROI context before it reaches the system prompt. Treat missing recall as intentional trimming, not a reason to manually dump every memory store.
+- If a task needs exact source truth, use the relevant tool (`read`, `rg`, `flow_graph`, `code_graph`, `sparse_tree_grep extract`) instead of assuming omitted context was irrelevant forever.
+- ContextLedger outcomes are coarse correlations. Current files, current verifier output, and explicit user instructions override old context ROI history.
+- Prefer compact, evidence-backed context over broad memory injection. The ledger rewards context that leads to verified progress and penalizes stale context that repeatedly correlates with failures.
+
+### BenchmarkMode
+
+- BenchmarkMode is AXIOM's strict coding-benchmark discipline for smaller models such as Gemma 31B. Follow it when the system prompt includes `AXIOM BenchmarkMode`.
+- When the Evidence Pack includes `BugLens ranked suspects`, inspect those files/functions first. BugLens combines stack/path mentions, symbol declarations, and ripgrep density; it is a localization priority list, not proof.
+- Localize before editing. Use `rg`/`read` plus `understand_code`, `code_graph`, or `flow_graph` until the smallest owning file/function/class is known.
+- Make the smallest targeted patch that addresses the current evidence. Do not refactor unrelated code, rename broadly, or rewrite working modules for style.
+- After edits, RepairLoop may run a verifier ladder: targeted verifier first, then broader cheap verifiers when the targeted check passes. If a later verifier fails, keep the localized fix and repair only the newly exposed broader failure.
+- If the same failure repeats twice, stop editing from memory and re-localize from exact verifier output and source.
+- If failure count grows sharply, assume the last patch was too broad. Narrow the scope before another edit.
+
 ### Tool Selection Order
 
 - For multi-step work, create/update `todo_list` first.
 - For unfamiliar code structure, run `understand_code`.
 - For cross-file relationships, run `code_graph`.
 - For behavior/data/effects/debugging, run `flow_graph`.
+- For long non-code documents, run `sparse_tree_grep compile/search/describe/extract`.
 - For exact source truth, use `read`.
 - For exact textual search, use `rg`/`find`/`ls` before broad shell commands.
 

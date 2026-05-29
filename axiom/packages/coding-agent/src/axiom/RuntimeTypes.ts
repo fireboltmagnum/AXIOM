@@ -65,6 +65,18 @@ export interface AxiomRuntimeSettings {
 	sparseTreeGrep: boolean;
 	/** Soft cap on SparseTreeGrep hits injected per task. */
 	sparseTreeGrepMaxRecall: number;
+	/**
+	 * ContextLedger: tracks every recalled context item, estimates token cost,
+	 * and learns which items correlate with successful or failed tasks.
+	 */
+	contextLedger: boolean;
+	/** Soft token budget for all Context Agent recall injected into one turn. */
+	contextLedgerMaxTokens: number;
+	/**
+	 * BenchmarkMode: injects a SWE-bench-style protocol for coding tasks and
+	 * lets RepairLoop run targeted-to-broader verifier ladders after edits.
+	 */
+	benchmarkMode: boolean;
 	/** Enable automatic verifier/repair feedback after code edits. */
 	repairLoop: boolean;
 	/** Max failed verifier packets injected per task. */
@@ -104,6 +116,23 @@ export interface AxiomRuntimeSettings {
 	rStarExploration: number;
 	/** Soft cap on concept summaries (problem-class aggregations) injected per task. */
 	conceptMaxRecall: number;
+	/**
+	 * Best-of-N candidate selection across repair-loop attempts (and, later,
+	 * parallel rollouts). 1 = disabled. See {@link BestOfNCoordinator}.
+	 */
+	bestOfN: number;
+	/**
+	 * Auto-retrieval task priming (Aider-style repo-map). When true, runtime
+	 * runs a deterministic pre-flight at task start (ripgrep over codebase +
+	 * 1-hop CodeGraph/FlowGraph walks for prompt-mentioned symbols) and
+	 * injects a compact structural brief into the system prompt.
+	 */
+	autoRetrieval: boolean;
+	/**
+	 * Auto-rollback: snapshot the working tree after every successful turn
+	 * and revert when the verifier shows the next turn regressed.
+	 */
+	autoRollback: boolean;
 }
 
 export interface AxiomClassifyInput {
@@ -499,6 +528,31 @@ export interface AxiomSparseTreeGrepChunk {
 	page: number;
 	summary: string;
 	keywords: string[];
+	/** Named people/places/objects surfaced cheaply at compile time. */
+	entities?: string[];
+	/** Frequent two-word semantic handles used by expandable node/search scoring. */
+	phrases?: string[];
+	/** Lazily generated compact scene/section description for promising hits. */
+	description?: AxiomSparseTreeGrepChunkDescription;
+	/**
+	 * Optional dense embedding of the chunk summary. Populated when an
+	 * embedder is available at index-time (@xenova/transformers installed and
+	 * model loaded). Stored as a plain number[] for JSON round-trip; converted
+	 * to Float32Array at query time. Length matches the embedder's dim.
+	 */
+	embedding?: number[];
+}
+
+export interface AxiomSparseTreeGrepChunkDescription {
+	generatedAt: string;
+	queryFocus?: string;
+	title: string;
+	description: string;
+	entities: string[];
+	actions: string[];
+	settings: string[];
+	evidence: string[];
+	neighborChunkIds: string[];
 }
 
 export interface AxiomSparseTreeGrepNode {
@@ -528,6 +582,10 @@ export interface AxiomSparseTreeGrepIndex {
 	pageCount: number;
 	chunks: AxiomSparseTreeGrepChunk[];
 	nodes: AxiomSparseTreeGrepNode[];
+	/** Embedder model id used at index time, if embeddings were computed.
+	 * `search()` only uses embeddings when the query-time embedder matches. */
+	embedderModel?: string;
+	embeddingDim?: number;
 }
 
 export interface AxiomSparseTreeGrepHit {
@@ -594,6 +652,80 @@ export interface AxiomConceptEdge {
 	timestamp: string;
 }
 
+export type AxiomContextLedgerKind =
+	| "reflection"
+	| "skill"
+	| "concept"
+	| "understanding"
+	| "code_graph"
+	| "flow_graph"
+	| "knowledge_graph"
+	| "sparse_tree_grep";
+
+export type AxiomContextLedgerOutcome = "success" | "failure";
+
+export interface AxiomContextLedgerCandidate {
+	key: string;
+	kind: AxiomContextLedgerKind;
+	label: string;
+	summary: string;
+	sourceIds: string[];
+	matchedKeywords: string[];
+	relevanceScore: number;
+	estimatedTokens: number;
+}
+
+export interface AxiomContextLedgerEntry {
+	key: string;
+	kind: AxiomContextLedgerKind;
+	label: string;
+	summary: string;
+	sourceIds: string[];
+	keywords: string[];
+	firstInjectedAt: string;
+	lastInjectedAt: string;
+	injectCount: number;
+	successCount: number;
+	failureCount: number;
+	failureStreak: number;
+	totalEstimatedTokens: number;
+	lastEstimatedTokens: number;
+	lastScore: number;
+	lastReason: string;
+	lastOutcomeAt?: string;
+	taskKinds: string[];
+	traceIds: string[];
+}
+
+export interface AxiomContextLedgerDecision extends AxiomContextLedgerCandidate {
+	action: "inject" | "drop";
+	ledgerScore: number;
+	reason: string;
+	history: {
+		injectCount: number;
+		successCount: number;
+		failureCount: number;
+		failureStreak: number;
+	};
+}
+
+export interface AxiomContextLedgerPlan {
+	taskSignature: string;
+	traceId?: string;
+	injected: AxiomContextLedgerDecision[];
+	dropped: AxiomContextLedgerDecision[];
+	estimatedTokensInjected: number;
+	estimatedTokensSaved: number;
+}
+
+export interface AxiomBenchmarkProtocol {
+	name: "benchmark-mode";
+	directives: string[];
+	toolSequence: string[];
+	verifierPolicy: string[];
+	stopRules: string[];
+}
+
 /** A single node in the reasoning graph. */
 export type AxiomGraphNodeStatus = "pending" | "in_progress" | "complete" | "failed" | "skipped";
 
@@ -618,6 +750,25 @@ export interface AxiomGraphNode {
 	startedAt?: string;
 	completedAt?: string;
 	error?: string;
+	/**
+	 * Optional bash one-liner that, when it exits 0, proves this subgoal has
+	 * actually been accomplished. Set by the planner LLM (or hand-authored)
+	 * to give the GraphExecutionTracker a way to check claims of completion
+	 * before advancing. Examples:
+	 *
+	 *     grep -q "newFunction" src/foo.ts
+	 *     npm run lint --workspace=packages/foo
+	 *     test -f dist/index.js
+	 *
+	 * If verifyClaim is set and exits non-zero when the tracker hits the
+	 * "complete" transition, the node is flipped to `failed` with a hint
+	 * that the claim couldn't be verified.
+	 */
+	verifyClaim?: string;
+	/** Last verifier exit code (set after a verifyClaim check runs). */
+	verifyExitCode?: number;
+	/** Whether the verifier successfully proved this subgoal (true/false/undef-not-checked). */
+	verifyPassed?: boolean;
 }
 
 /**
@@ -722,8 +873,66 @@ export interface AxiomTaskPlan {
 	knowledgeGraphRecalls: AxiomKnowledgeGraphHit[];
 	sparseTreeGrepRecalls: AxiomSparseTreeGrepHit[];
 	conceptRecalls: AxiomConceptSummary[];
+	contextLedger?: AxiomContextLedgerPlan;
+	benchmarkProtocol?: AxiomBenchmarkProtocol;
 	graph?: AxiomReasoningGraph;
 	ascot: AxiomASCoTPlan;
+	/** Auto-retrieval task primer (Aider-style repo-map injection). Present
+	 * when the `autoRetrieval` setting is enabled and the pre-flight produced
+	 * any signal. Rendered into the system prompt by buildSystemPromptAppend. */
+	primer?: AxiomTaskPrimer;
+}
+
+export interface AxiomTaskPrimerFileHit {
+	file: string;
+	matchCount: number;
+	sampleLines: Array<{ line: number; text: string }>;
+}
+
+export interface AxiomTaskPrimerSymbolWalk {
+	symbol: string;
+	codeGraphNeighbors: string[];
+	flowGraphNeighbors: string[];
+}
+
+export interface AxiomTaskPrimerFileStructure {
+	file: string;
+	language: string;
+	lineCount: number;
+	symbols: Array<Pick<AxiomSymbolEntry, "kind" | "name" | "line">>;
+	imports: string[];
+}
+
+export interface AxiomTaskPrimerFlowSlice {
+	graphId: string;
+	mode: "summary" | "expanded";
+	focus?: string;
+	sections: Array<{
+		title: string;
+		nodes: string[];
+		edges: string[];
+	}>;
+	expansionHints: string[];
+}
+
+export interface AxiomTaskPrimerBugLensCandidate {
+	file: string;
+	score: number;
+	reasons: string[];
+	symbols: Array<Pick<AxiomSymbolEntry, "kind" | "name" | "line">>;
+	sampleLines: Array<{ line: number; text: string }>;
+}
+
+export interface AxiomTaskPrimer {
+	extractedSymbols: string[];
+	bugLens: AxiomTaskPrimerBugLensCandidate[];
+	fileHits: AxiomTaskPrimerFileHit[];
+	symbolWalks: AxiomTaskPrimerSymbolWalk[];
+	fileStructures: AxiomTaskPrimerFileStructure[];
+	flowSlices: AxiomTaskPrimerFlowSlice[];
+	documentHits: AxiomSparseTreeGrepHit[];
+	durationMs: number;
+	briefTokens: number;
 }
 
 export type AxiomTraceRecord =
@@ -830,6 +1039,30 @@ export type AxiomTraceRecord =
 			documentIds: string[];
 	  }
 	| {
+			type: "context_ledger";
+			timestamp: string;
+			traceId: string;
+			injectedCount: number;
+			droppedCount: number;
+			estimatedTokensInjected: number;
+			estimatedTokensSaved: number;
+			dropped: Array<{ key: string; kind: AxiomContextLedgerKind; reason: string }>;
+	  }
+	| {
+			type: "context_ledger_outcome";
+			timestamp: string;
+			traceId: string;
+			outcome: AxiomContextLedgerOutcome;
+			itemCount: number;
+	  }
+	| {
+			type: "benchmark_protocol";
+			timestamp: string;
+			traceId: string;
+			directiveCount: number;
+			toolSequenceCount: number;
+	  }
+	| {
 			type: "code_graph_recall";
 			timestamp: string;
 			traceId: string;
@@ -891,6 +1124,10 @@ export type AxiomTraceRecord =
 			durationMs: number;
 			issueCount: number;
 			signature: string;
+			patchRiskLevel?: string;
+			patchRiskScore?: number;
+			patchRiskBlocked?: boolean;
+			patchRiskSignalCount?: number;
 	  }
 	| {
 			type: "repair_exhausted";
@@ -924,6 +1161,20 @@ export type AxiomTraceRecord =
 			reason: string;
 			passed: boolean;
 			issueCount: number;
+	  }
+	| {
+			type: "task_primer";
+			timestamp: string;
+			traceId: string;
+			extractedSymbolCount: number;
+			bugLensCount?: number;
+			fileHitCount: number;
+			symbolWalkCount: number;
+			fileStructureCount?: number;
+			flowSliceCount?: number;
+			documentHitCount?: number;
+			briefTokens: number;
+			durationMs: number;
 	  }
 	| { type: "task_end"; timestamp: string; traceId: string; latencyMs: number; outcome: "completed" | "error" };
 

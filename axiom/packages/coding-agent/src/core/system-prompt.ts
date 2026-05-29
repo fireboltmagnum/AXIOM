@@ -118,7 +118,7 @@ function buildAxiomToolWorkflow(tools: string[]): string {
 	}
 	if (active.has("sparse_tree_grep")) {
 		lines.push(
-			"Use sparse_tree_grep for long non-code documents: index/search lightweight summaries, expand tree nodes, then extract exact chunks.",
+			"Use sparse_tree_grep for long non-code documents: compile the expandable JSON tree, search lightweight summaries/entities/actions, describe promising chunks lazily, then extract exact chunks.",
 		);
 	}
 	if (active.has("playwright_cli")) {

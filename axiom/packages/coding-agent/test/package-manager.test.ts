@@ -256,7 +256,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "my-extensions-pkg",
-					pi: {
+					axiom: {
 						extensions: ["./extensions/clip.ts", "./extensions/cost.ts"],
 					},
 				}),
@@ -562,7 +562,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "my-package",
-					pi: {
+					axiom: {
 						extensions: ["./src/index.ts"],
 						skills: ["./skills"],
 					},
@@ -603,7 +603,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "tilde-manifest-package",
-					pi: {
+					axiom: {
 						extensions: ["~extensions/main.ts", "~/extensions/alt.ts"],
 						skills: ["~skills", "~/skills"],
 					},
@@ -1407,7 +1407,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "manifest-pkg",
-					pi: {
+					axiom: {
 						extensions: ["extensions", "node_modules/dep/extensions", "!**/skip.ts"],
 					},
 				}),
@@ -1435,7 +1435,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "skill-manifest-pkg",
-					pi: {
+					axiom: {
 						skills: ["skills", "!**/bad-skill"],
 					},
 				}),
@@ -1462,7 +1462,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "skill-manifest-glob-pkg",
-					pi: {
+					axiom: {
 						skills: ["./plugins/*/skills"],
 					},
 				}),
@@ -1487,7 +1487,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "layered-pkg",
-					pi: {
+					axiom: {
 						extensions: ["extensions", "!**/baz.ts"],
 					},
 				}),
@@ -1691,7 +1691,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "manifest-force-pkg",
-					pi: {
+					axiom: {
 						extensions: ["extensions", "!**/two.ts", "+extensions/two.ts"],
 					},
 				}),
@@ -1921,7 +1921,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			writeFileSync(
 				join(pkgDir, "extensions", "custom", "package.json"),
 				JSON.stringify({
-					pi: {
+					axiom: {
 						extensions: ["./main.ts"],
 					},
 				}),

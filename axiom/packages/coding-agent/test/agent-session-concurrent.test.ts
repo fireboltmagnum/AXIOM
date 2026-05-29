@@ -114,6 +114,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		// Set a runtime API key so validation passes
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Characterization test for the base prompt-guard/queue/event-ordering logic.
+		// AXIOM is disabled so its pre-stream planning does not shift when streaming
+		// begins (these tests assert streaming state on a tight 10ms window).
+		settingsManager.applyOverrides({ axiom: { enabled: false } });
 
 		session = new AgentSession({
 			agent,
@@ -238,6 +242,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Characterization test for the base prompt-guard/queue/event-ordering logic.
+		// AXIOM is disabled so its pre-stream planning does not shift when streaming
+		// begins (these tests assert streaming state on a tight 10ms window).
+		settingsManager.applyOverrides({ axiom: { enabled: false } });
 
 		const extensionsResult = await createTestExtensionsResult([
 			(pi) => {
@@ -316,6 +324,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Characterization test for the base prompt-guard/queue/event-ordering logic.
+		// AXIOM is disabled so its pre-stream planning does not shift when streaming
+		// begins (these tests assert streaming state on a tight 10ms window).
+		settingsManager.applyOverrides({ axiom: { enabled: false } });
 
 		session = new AgentSession({
 			agent,
@@ -422,6 +434,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Characterization test for the base prompt-guard/queue/event-ordering logic.
+		// AXIOM is disabled so its pre-stream planning does not shift when streaming
+		// begins (these tests assert streaming state on a tight 10ms window).
+		settingsManager.applyOverrides({ axiom: { enabled: false } });
 
 		session = new AgentSession({
 			agent,
@@ -568,6 +584,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Characterization test for the base prompt-guard/queue/event-ordering logic.
+		// AXIOM is disabled so its pre-stream planning does not shift when streaming
+		// begins (these tests assert streaming state on a tight 10ms window).
+		settingsManager.applyOverrides({ axiom: { enabled: false } });
 
 		session = new AgentSession({
 			agent,

@@ -384,6 +384,13 @@ function createHarnessWithResourceLoader(
 	const sessionManager = SessionManager.inMemory();
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
 
+	// This harness characterizes base AgentSession behavior, so AXIOM's
+	// difficulty router / local fast path / pre-stream planning is disabled by
+	// default — otherwise trivial prompts (e.g. "hi") get answered locally and
+	// never reach the faux model. Tests that exercise AXIOM opt in explicitly
+	// via `settings: { axiom: { enabled: true } }`.
+	settingsManager.applyOverrides({ axiom: { enabled: false } });
+
 	if (options.settings) {
 		settingsManager.applyOverrides(options.settings);
 	}

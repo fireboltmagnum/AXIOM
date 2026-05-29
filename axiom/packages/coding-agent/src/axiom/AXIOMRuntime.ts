@@ -1,34 +1,50 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentEvent } from "@axiom/agent-core";
 import type { AssistantMessage, Model } from "@axiom/ai";
 import { ASCoTPlanner } from "./ASCoTPlanner.ts";
 import { AXIOMTraceStore } from "./AXIOMTrace.ts";
+import { BenchmarkProtocol } from "./BenchmarkProtocol.ts";
+import { CodebaseFingerprint } from "./CodebaseFingerprint.ts";
+import { CodeSymbolIndex } from "./CodeSymbolIndex.ts";
 import { ContextAgent } from "./ContextAgent.ts";
+import { ContextLedgerStore } from "./ContextLedgerStore.ts";
 import { GraphPlanner } from "./GraphPlanner.ts";
 import { AXIOM_IP_RETRY_END_TAG, AXIOM_IP_RETRY_TAG, IPValidator } from "./IPValidator.ts";
 import { ReasoningCritic } from "./ReasoningCritic.ts";
 import { RStarPlanner } from "./RStarPlanner.ts";
 import type {
 	AxiomAbstraction,
+	AxiomCodeGraphHit,
+	AxiomConceptSummary,
+	AxiomContextLedgerCandidate,
+	AxiomContextLedgerOutcome,
+	AxiomFlowGraphHit,
 	AxiomGraphExecutionSnapshot,
 	AxiomGraphExecutionUpdate,
 	AxiomIPIssue,
 	AxiomIPValidationResult,
+	AxiomKnowledgeGraphHit,
 	AxiomReasoningGraph,
 	AxiomReflection,
+	AxiomReflectionRecallHit,
 	AxiomRuntimePromptContext,
 	AxiomRuntimeSettings,
 	AxiomSkill,
 	AxiomSkillOutcome,
+	AxiomSkillRecallHit,
+	AxiomSparseTreeGrepHit,
 	AxiomTaskClassification,
 	AxiomTaskKind,
 	AxiomTaskPlan,
+	AxiomTaskPrimer,
 	AxiomTraceMessageSummary,
 	AxiomTraceModelSnapshot,
+	AxiomUnderstandingRecallHit,
 } from "./RuntimeTypes.ts";
 import { StepBackAbstractor } from "./StepBackAbstractor.ts";
 import type { StreamingChunkCheckResult } from "./StreamingIPValidator.ts";
 import { TaskClassifier } from "./TaskClassifier.ts";
+import { renderTaskPrimerBrief, TaskPrimer } from "./TaskPrimer.ts";
 
 function textAndThinkingStats(message: AssistantMessage): {
 	textChars: number;
@@ -99,20 +115,240 @@ function renderReasoningGraphTree(graph: AxiomReasoningGraph): string[] {
 	return rendered;
 }
 
+interface RecallBundle {
+	recalls: AxiomReflectionRecallHit[];
+	skillRecalls: AxiomSkillRecallHit[];
+	understandingRecalls: AxiomUnderstandingRecallHit[];
+	codeGraphRecalls: AxiomCodeGraphHit[];
+	flowGraphRecalls: AxiomFlowGraphHit[];
+	knowledgeGraphRecalls: AxiomKnowledgeGraphHit[];
+	sparseTreeGrepRecalls: AxiomSparseTreeGrepHit[];
+	conceptRecalls: AxiomConceptSummary[];
+}
+
+function estimateTokens(text: string): number {
+	return Math.max(1, Math.ceil(text.replace(/\s+/g, " ").trim().length / 4));
+}
+
+function taskSignatureFor(options: {
+	text: string;
+	classification: AxiomTaskClassification;
+	keywords: readonly string[];
+}): string {
+	return createHash("sha256")
+		.update(
+			[
+				options.classification.kind,
+				options.classification.route,
+				...options.keywords.slice(0, 24).map((keyword) => keyword.toLowerCase()),
+				snippet(options.text, 500).toLowerCase(),
+			].join("\n"),
+		)
+		.digest("hex")
+		.slice(0, 20);
+}
+
+function buildContextLedgerCandidates(bundle: RecallBundle): AxiomContextLedgerCandidate[] {
+	const candidates: AxiomContextLedgerCandidate[] = [];
+
+	for (const hit of bundle.recalls) {
+		const r = hit.reflection;
+		const summary = `${r.failureType}: ${r.cause} Correction: ${r.correction}`;
+		candidates.push({
+			key: `reflection:${r.id}`,
+			kind: "reflection",
+			label: `${r.failureType}:${r.id}`,
+			summary: snippet(summary, 260),
+			sourceIds: [r.id],
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.skillRecalls) {
+		const s = hit.skill;
+		const summary = `${s.title}. Tools: ${s.toolsUsed.join(", ") || "none"}. ${s.taskSnippet}`;
+		candidates.push({
+			key: `skill:${s.id}`,
+			kind: "skill",
+			label: s.title,
+			summary: snippet(summary, 260),
+			sourceIds: [s.id],
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.understandingRecalls) {
+		const u = hit.understanding;
+		const files = u.files
+			.slice(0, 4)
+			.map((file) => `${file.path}:${file.symbols.map((symbol) => symbol.name).join(",")}`)
+			.join(" ");
+		const summary = `${u.rootPath} ${u.fileCount} files ${files}`;
+		candidates.push({
+			key: `understanding:${u.id}`,
+			kind: "understanding",
+			label: u.rootPath,
+			summary: snippet(summary, 260),
+			sourceIds: [u.id],
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.codeGraphRecalls) {
+		const primary = hit.nodes[0];
+		const edgeSummary = hit.edges
+			.slice(0, 4)
+			.map((edge) => `${edge.fromId}-${edge.kind}-${edge.toId}`)
+			.join(" ");
+		const summary = `${hit.graph.rootPath} ${primary?.label ?? "graph"} ${edgeSummary}`;
+		candidates.push({
+			key: `code_graph:${hit.graph.id}:${primary?.id ?? hit.matchedKeywords.join(",")}`,
+			kind: "code_graph",
+			label: `${hit.graph.rootPath}:${primary?.label ?? "graph"}`,
+			summary: snippet(summary, 260),
+			sourceIds: [hit.graph.id, primary?.id].filter((value): value is string => !!value),
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.flowGraphRecalls) {
+		const primary = hit.nodes[0];
+		const edgeSummary = hit.edges
+			.slice(0, 5)
+			.map((edge) => `${edge.fromId}-${edge.kind}-${edge.toId}`)
+			.join(" ");
+		const summary = `${hit.graph.rootPath} ${primary?.label ?? "flow"} ${edgeSummary}`;
+		candidates.push({
+			key: `flow_graph:${hit.graph.id}:${primary?.id ?? hit.matchedKeywords.join(",")}`,
+			kind: "flow_graph",
+			label: `${hit.graph.rootPath}:${primary?.label ?? "flow"}`,
+			summary: snippet(summary, 260),
+			sourceIds: [hit.graph.id, primary?.id].filter((value): value is string => !!value),
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.knowledgeGraphRecalls) {
+		const edgeLabels = hit.edges
+			.slice(0, 5)
+			.map((edge) => `${edge.fromId}-${edge.relation}-${edge.toId}`)
+			.join(" ");
+		const label = hit.nodes[0]?.label ?? hit.edges[0]?.relation ?? "knowledge";
+		const summary = `${label} ${edgeLabels}`;
+		candidates.push({
+			key: `knowledge_graph:${hit.edges
+				.slice(0, 3)
+				.map((edge) => edge.id)
+				.join(",")}`,
+			kind: "knowledge_graph",
+			label,
+			summary: snippet(summary, 260),
+			sourceIds: [...hit.nodes.map((node) => node.id), ...hit.edges.map((edge) => edge.id)].slice(0, 12),
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const hit of bundle.sparseTreeGrepRecalls) {
+		const summary = `${hit.documentName} ${hit.chunkId} ${hit.nodeLabel ?? ""} ${hit.chunkSummary}`;
+		candidates.push({
+			key: `sparse_tree_grep:${hit.documentId}:${hit.chunkId}`,
+			kind: "sparse_tree_grep",
+			label: `${hit.documentName}:${hit.chunkId}`,
+			summary: snippet(summary, 260),
+			sourceIds: [hit.documentId, hit.chunkId],
+			matchedKeywords: hit.matchedKeywords,
+			relevanceScore: hit.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	for (const concept of bundle.conceptRecalls) {
+		const summary = `${concept.problemClass}: ${concept.reflectionIds.length} reflections, ${concept.skillIds.length} skills, ${concept.edges.length} edges.`;
+		candidates.push({
+			key: `concept:${concept.problemClass.toLowerCase()}`,
+			kind: "concept",
+			label: concept.problemClass,
+			summary,
+			sourceIds: [...concept.reflectionIds, ...concept.skillIds].slice(0, 12),
+			matchedKeywords: [concept.problemClass],
+			relevanceScore: concept.score,
+			estimatedTokens: estimateTokens(summary),
+		});
+	}
+
+	return candidates;
+}
+
+function filterBundleByContextLedger(bundle: RecallBundle, injectedKeys: Set<string>): RecallBundle {
+	return {
+		recalls: bundle.recalls.filter((hit) => injectedKeys.has(`reflection:${hit.reflection.id}`)),
+		skillRecalls: bundle.skillRecalls.filter((hit) => injectedKeys.has(`skill:${hit.skill.id}`)),
+		understandingRecalls: bundle.understandingRecalls.filter((hit) =>
+			injectedKeys.has(`understanding:${hit.understanding.id}`),
+		),
+		codeGraphRecalls: bundle.codeGraphRecalls.filter((hit) => {
+			const primary = hit.nodes[0];
+			return injectedKeys.has(`code_graph:${hit.graph.id}:${primary?.id ?? hit.matchedKeywords.join(",")}`);
+		}),
+		flowGraphRecalls: bundle.flowGraphRecalls.filter((hit) => {
+			const primary = hit.nodes[0];
+			return injectedKeys.has(`flow_graph:${hit.graph.id}:${primary?.id ?? hit.matchedKeywords.join(",")}`);
+		}),
+		knowledgeGraphRecalls: bundle.knowledgeGraphRecalls.filter((hit) =>
+			injectedKeys.has(
+				`knowledge_graph:${hit.edges
+					.slice(0, 3)
+					.map((edge) => edge.id)
+					.join(",")}`,
+			),
+		),
+		sparseTreeGrepRecalls: bundle.sparseTreeGrepRecalls.filter((hit) =>
+			injectedKeys.has(`sparse_tree_grep:${hit.documentId}:${hit.chunkId}`),
+		),
+		conceptRecalls: bundle.conceptRecalls.filter((concept) =>
+			injectedKeys.has(`concept:${concept.problemClass.toLowerCase()}`),
+		),
+	};
+}
+
 export class AXIOMRuntime {
 	private readonly classifier = new TaskClassifier();
 	private readonly validator = new IPValidator();
 	private readonly stepBack = new StepBackAbstractor();
 	private readonly ascot = new ASCoTPlanner();
 	private readonly context = new ContextAgent();
+	private readonly contextLedger = new ContextLedgerStore();
 	private readonly graphPlanner = new GraphPlanner();
 	private readonly rstarPlanner = new RStarPlanner();
 	private readonly critic = new ReasoningCritic();
+	private readonly benchmarkProtocol = new BenchmarkProtocol();
+	private readonly taskPrimer = new TaskPrimer();
 	private readonly traceStore: AXIOMTraceStore;
 	private readonly settings: AxiomRuntimeSettings;
+	private readonly cwd: string;
+	/** Lazy: only constructed when autoRetrieval first fires. Cheap on
+	 * construction (no I/O) but the first .query() walks the repo, so we
+	 * defer until we actually need it. */
+	private codeSymbolIndex: CodeSymbolIndex | undefined;
+	/** Lazy per-repo style profile. Same gate as autoRetrieval — both are
+	 * pre-task context injection. ~50-200ms cold; cached on disk thereafter. */
+	private codebaseFingerprint: CodebaseFingerprint | undefined;
 
 	constructor(options: { cwd: string; sessionId: string; settings: AxiomRuntimeSettings }) {
 		this.settings = options.settings;
+		this.cwd = options.cwd;
 		this.traceStore = new AXIOMTraceStore({
 			cwd: options.cwd,
 			sessionId: options.sessionId,
@@ -223,7 +459,7 @@ export class AXIOMRuntime {
 		const limitSparseTreeGrep =
 			this.settings.enabled && this.settings.sparseTreeGrep ? this.settings.sparseTreeGrepMaxRecall : 0;
 		const limitConcepts = this.settings.enabled ? this.settings.conceptMaxRecall : 0;
-		const {
+		let {
 			reflections: recalls,
 			skills: skillRecalls,
 			understandings: understandingRecalls,
@@ -232,7 +468,7 @@ export class AXIOMRuntime {
 			knowledge: knowledgeGraphRecalls,
 			sparseTreeGrep: sparseTreeGrepRecalls,
 			concepts: conceptRecalls,
-		} = this.context.recall({
+		} = await this.context.recall({
 			keywords: recallKeywords,
 			taskKind: classification.kind,
 			limitReflections,
@@ -244,6 +480,53 @@ export class AXIOMRuntime {
 			limitSparseTreeGrep,
 			limitConcepts,
 		});
+		let contextLedger: AxiomTaskPlan["contextLedger"];
+		if (this.settings.enabled && this.settings.contextLedger) {
+			const bundle: RecallBundle = {
+				recalls,
+				skillRecalls,
+				understandingRecalls,
+				codeGraphRecalls,
+				flowGraphRecalls,
+				knowledgeGraphRecalls,
+				sparseTreeGrepRecalls,
+				conceptRecalls,
+			};
+			contextLedger = this.contextLedger.evaluateAndRecord({
+				traceId,
+				taskSignature: taskSignatureFor({ text, classification, keywords: recallKeywords }),
+				taskKind: classification.kind,
+				keywords: recallKeywords,
+				candidates: buildContextLedgerCandidates(bundle),
+				maxEstimatedTokens: this.settings.contextLedgerMaxTokens,
+			});
+			const filtered = filterBundleByContextLedger(
+				bundle,
+				new Set(contextLedger.injected.map((decision) => decision.key)),
+			);
+			recalls = filtered.recalls;
+			skillRecalls = filtered.skillRecalls;
+			understandingRecalls = filtered.understandingRecalls;
+			codeGraphRecalls = filtered.codeGraphRecalls;
+			flowGraphRecalls = filtered.flowGraphRecalls;
+			knowledgeGraphRecalls = filtered.knowledgeGraphRecalls;
+			sparseTreeGrepRecalls = filtered.sparseTreeGrepRecalls;
+			conceptRecalls = filtered.conceptRecalls;
+			this.traceStore.record({
+				type: "context_ledger",
+				timestamp: new Date().toISOString(),
+				traceId,
+				injectedCount: contextLedger.injected.length,
+				droppedCount: contextLedger.dropped.length,
+				estimatedTokensInjected: contextLedger.estimatedTokensInjected,
+				estimatedTokensSaved: contextLedger.estimatedTokensSaved,
+				dropped: contextLedger.dropped.slice(0, 12).map((decision) => ({
+					key: decision.key,
+					kind: decision.kind,
+					reason: decision.reason,
+				})),
+			});
+		}
 
 		this.traceStore.record({
 			type: "reflection_recall",
@@ -439,6 +722,7 @@ export class AXIOMRuntime {
 			abstraction,
 			recalls,
 			enabled: this.settings.enabled && this.settings.ascotDepth,
+			availableTools: options.availableTools,
 		});
 
 		this.traceStore.record({
@@ -450,6 +734,68 @@ export class AXIOMRuntime {
 			strategyHintCount: ascot.strategyHints.length,
 		});
 
+		const benchmarkProtocol =
+			this.settings.enabled && this.settings.benchmarkMode
+				? this.benchmarkProtocol.plan({ classification, availableTools: options.availableTools ?? [] })
+				: undefined;
+		if (benchmarkProtocol) {
+			this.traceStore.record({
+				type: "benchmark_protocol",
+				timestamp: new Date().toISOString(),
+				traceId,
+				directiveCount: benchmarkProtocol.directives.length,
+				toolSequenceCount: benchmarkProtocol.toolSequence.length,
+			});
+		}
+
+		// Step 5: auto-retrieval task primer (Aider-style repo-map). Runs only
+		// when enabled and degrades silently on any error — the rest of the
+		// plan is unaffected if ripgrep is missing / cwd is weird / etc.
+		let primer: AxiomTaskPrimer | undefined;
+		if (this.settings.enabled && this.settings.autoRetrieval) {
+			try {
+				if (!this.codeSymbolIndex) {
+					this.codeSymbolIndex = new CodeSymbolIndex({ cwd: this.cwd });
+				}
+				const result = await this.taskPrimer.prime({
+					cwd: this.cwd,
+					prompt: text,
+					keywords: recallKeywords,
+					codeGraphs: this.context.codeGraphStore,
+					flowGraphs: this.context.flowGraphStore,
+					sparseTreeGrep: this.context.sparseTreeGrepStore,
+					symbolIndex: this.codeSymbolIndex,
+				});
+				if (
+					result.bugLens.length > 0 ||
+					result.extractedSymbols.length > 0 ||
+					result.fileHits.length > 0 ||
+					result.symbolWalks.length > 0 ||
+					result.fileStructures.length > 0 ||
+					result.flowSlices.length > 0 ||
+					result.documentHits.length > 0
+				) {
+					primer = result;
+				}
+				this.traceStore.record({
+					type: "task_primer",
+					timestamp: new Date().toISOString(),
+					traceId,
+					extractedSymbolCount: result.extractedSymbols.length,
+					bugLensCount: result.bugLens.length,
+					fileHitCount: result.fileHits.length,
+					symbolWalkCount: result.symbolWalks.length,
+					fileStructureCount: result.fileStructures.length,
+					flowSliceCount: result.flowSlices.length,
+					documentHitCount: result.documentHits.length,
+					briefTokens: result.briefTokens,
+					durationMs: result.durationMs,
+				});
+			} catch {
+				// Best-effort — fall through with no primer attached.
+			}
+		}
+
 		return {
 			abstraction,
 			recalls,
@@ -460,8 +806,11 @@ export class AXIOMRuntime {
 			knowledgeGraphRecalls,
 			sparseTreeGrepRecalls,
 			conceptRecalls,
+			contextLedger,
+			benchmarkProtocol,
 			graph,
 			ascot,
+			primer,
 		};
 	}
 
@@ -472,11 +821,56 @@ export class AXIOMRuntime {
 	buildSystemPromptAppend(plan: AxiomTaskPlan): string {
 		const sections: string[] = [];
 
+		// Codebase fingerprint: per-repo style profile. Shares the autoRetrieval
+		// gate because both are pre-task context injection. Deterministic build,
+		// disk-cached, hard-capped at ~280 chars. Skipped when string is empty
+		// (no code files sampled, or rebuild failed).
+		if (this.settings.enabled && this.settings.autoRetrieval) {
+			if (!this.codebaseFingerprint) {
+				this.codebaseFingerprint = new CodebaseFingerprint({ cwd: this.cwd });
+			}
+			const brief = this.codebaseFingerprint.renderForPrompt();
+			if (brief) {
+				sections.push(brief);
+				sections.push("");
+			}
+		}
+
 		if (plan.ascot.strategyHints.length > 0) {
 			sections.push("# AXIOM Strategy");
 			sections.push("");
 			for (const hint of plan.ascot.strategyHints) {
 				sections.push(`- ${hint}`);
+			}
+			sections.push("");
+		}
+
+		if (plan.benchmarkProtocol) {
+			sections.push("# AXIOM BenchmarkMode");
+			sections.push("");
+			sections.push(
+				"Gemma is the base model; AXIOM must supply benchmark discipline. Follow this protocol for coding/terminal-bench-style tasks.",
+			);
+			sections.push("");
+			for (const directive of plan.benchmarkProtocol.directives) {
+				sections.push(`- ${directive}`);
+			}
+			if (plan.benchmarkProtocol.toolSequence.length > 0) {
+				sections.push("");
+				sections.push("Tool sequence:");
+				for (const tool of plan.benchmarkProtocol.toolSequence) {
+					sections.push(`- ${tool}`);
+				}
+			}
+			sections.push("");
+			sections.push("Verifier policy:");
+			for (const rule of plan.benchmarkProtocol.verifierPolicy) {
+				sections.push(`- ${rule}`);
+			}
+			sections.push("");
+			sections.push("Stop rules:");
+			for (const rule of plan.benchmarkProtocol.stopRules) {
+				sections.push(`- ${rule}`);
 			}
 			sections.push("");
 		}
@@ -724,6 +1118,16 @@ export class AXIOMRuntime {
 			sections.push("");
 			sections.push(...renderReasoningGraphTree(plan.graph));
 			sections.push("");
+		}
+
+		// Auto-retrieval brief: rendered last so the agent reads it right
+		// before its first turn. Hard token cap defends the system prompt.
+		if (plan.primer) {
+			const brief = renderTaskPrimerBrief(plan.primer, 500);
+			if (brief) {
+				sections.push(brief);
+				sections.push("");
+			}
 		}
 
 		return sections.join("\n").trim();
@@ -1014,6 +1418,19 @@ export class AXIOMRuntime {
 		});
 	}
 
+	recordContextLedgerOutcome(traceId: string | undefined, outcome: AxiomContextLedgerOutcome): void {
+		if (!this.settings.enabled || !this.settings.contextLedger) return;
+		const itemCount = this.contextLedger.recordOutcome(traceId, outcome);
+		if (!traceId || itemCount === 0) return;
+		this.traceStore.record({
+			type: "context_ledger_outcome",
+			timestamp: new Date().toISOString(),
+			traceId,
+			outcome,
+			itemCount,
+		});
+	}
+
 	recordRepairAttempt(
 		traceId: string | undefined,
 		params: {
@@ -1027,6 +1444,10 @@ export class AXIOMRuntime {
 			durationMs: number;
 			issueCount: number;
 			signature: string;
+			patchRiskLevel?: string;
+			patchRiskScore?: number;
+			patchRiskBlocked?: boolean;
+			patchRiskSignalCount?: number;
 		},
 	): void {
 		if (!traceId) return;

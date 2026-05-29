@@ -75,11 +75,15 @@ export type AxiomFeatureKey =
 	| "flowGraph"
 	| "knowledgeGraph"
 	| "sparseTreeGrep"
+	| "contextLedger"
+	| "benchmarkMode"
 	| "repairLoop"
 	| "playwrightCli"
 	| "reasoningGraph"
 	| "rStarSearch"
-	| "reasoningCritic";
+	| "reasoningCritic"
+	| "autoRetrieval"
+	| "autoRollback";
 
 export interface AxiomSettings {
 	effort?: AxiomEffortLevel; // default: balanced
@@ -176,6 +180,18 @@ export interface AxiomSettings {
 	/** Soft cap on SparseTreeGrep hits injected per task. */
 	sparseTreeGrepMaxRecall?: number;
 	/**
+	 * ContextLedger: track context ROI and suppress repeated low-value recall
+	 * before it enters the system prompt.
+	 */
+	contextLedger?: boolean;
+	/** Soft token budget for Context Agent recall after ledger scoring. */
+	contextLedgerMaxTokens?: number;
+	/**
+	 * BenchmarkMode: stricter coding-benchmark workflow plus verifier ladders.
+	 * Keeps smaller models disciplined without switching the model.
+	 */
+	benchmarkMode?: boolean;
+	/**
 	 * RepairLoop: after successful code edits, run the cheapest detected verifier
 	 * and feed compact failure packets back to the model for targeted repair.
 	 */
@@ -228,6 +244,23 @@ export interface AxiomSettings {
 	 * parallel worktree rollouts later. 1 = disabled.
 	 */
 	bestOfN?: number;
+	/**
+	 * Auto-retrieval task priming (Aider-style repo-map injection). When
+	 * enabled, AXIOM runs a fast deterministic pre-flight at task start —
+	 * ripgrep over the codebase + 1-hop graph walks for symbols mentioned in
+	 * the prompt — and injects a compact "structural brief" into the system
+	 * prompt. The agent starts the task already holding the map, saving 3–5
+	 * discovery turns.
+	 */
+	autoRetrieval?: boolean;
+	/**
+	 * Auto-rollback on verifier regression. After each turn with edits, AXIOM
+	 * takes a non-destructive `git stash create` snapshot tied to the current
+	 * verifier issue count. If the NEXT turn's verifier produces strictly
+	 * MORE failures, the working tree is restored from the snapshot and the
+	 * agent is told to try a different approach.
+	 */
+	autoRollback?: boolean;
 }
 
 export interface ResolvedAxiomSettings {
@@ -259,6 +292,9 @@ export interface ResolvedAxiomSettings {
 	knowledgeGraphMaxRecall: number;
 	sparseTreeGrep: boolean;
 	sparseTreeGrepMaxRecall: number;
+	contextLedger: boolean;
+	contextLedgerMaxTokens: number;
+	benchmarkMode: boolean;
 	repairLoop: boolean;
 	repairLoopMaxAttempts: number;
 	repairLoopTimeoutMs: number;
@@ -273,6 +309,8 @@ export interface ResolvedAxiomSettings {
 	rStarExploration: number;
 	conceptMaxRecall: number;
 	bestOfN: number;
+	autoRetrieval: boolean;
+	autoRollback: boolean;
 }
 
 export const AXIOM_EFFORT_LEVELS: AxiomEffortLevel[] = ["off", "fast", "balanced", "rigorous", "custom"];
@@ -306,6 +344,9 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		knowledgeGraphMaxRecall: 0,
 		sparseTreeGrep: false,
 		sparseTreeGrepMaxRecall: 0,
+		contextLedger: false,
+		contextLedgerMaxTokens: 0,
+		benchmarkMode: false,
 		repairLoop: false,
 		repairLoopMaxAttempts: 0,
 		repairLoopTimeoutMs: 0,
@@ -320,6 +361,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
 		bestOfN: 1,
+		autoRetrieval: false,
+		autoRollback: false,
 	},
 	fast: {
 		enabled: true,
@@ -349,6 +392,9 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		knowledgeGraphMaxRecall: 0,
 		sparseTreeGrep: false,
 		sparseTreeGrepMaxRecall: 0,
+		contextLedger: false,
+		contextLedgerMaxTokens: 0,
+		benchmarkMode: false,
 		repairLoop: false,
 		repairLoopMaxAttempts: 0,
 		repairLoopTimeoutMs: 0,
@@ -363,6 +409,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
 		bestOfN: 1,
+		autoRetrieval: false,
+		autoRollback: false,
 	},
 	balanced: {
 		enabled: true,
@@ -392,6 +440,9 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		knowledgeGraphMaxRecall: 3,
 		sparseTreeGrep: true,
 		sparseTreeGrepMaxRecall: 4,
+		contextLedger: true,
+		contextLedgerMaxTokens: 1400,
+		benchmarkMode: true,
 		repairLoop: true,
 		repairLoopMaxAttempts: 2,
 		repairLoopTimeoutMs: 20_000,
@@ -406,6 +457,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 3,
 		bestOfN: 3,
+		autoRetrieval: true,
+		autoRollback: true,
 	},
 	rigorous: {
 		enabled: true,
@@ -435,6 +488,9 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		knowledgeGraphMaxRecall: 6,
 		sparseTreeGrep: true,
 		sparseTreeGrepMaxRecall: 8,
+		contextLedger: true,
+		contextLedgerMaxTokens: 2600,
+		benchmarkMode: true,
 		repairLoop: true,
 		repairLoopMaxAttempts: 3,
 		repairLoopTimeoutMs: 30_000,
@@ -449,6 +505,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 5,
 		bestOfN: 5,
+		autoRetrieval: true,
+		autoRollback: true,
 	},
 };
 
@@ -459,6 +517,14 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		return {
 			effort,
 			...profile,
+			// Top-level toggles must remain user-overridable even when an effort
+			// profile is selected — otherwise `axiom: { enabled: false }` (the only
+			// way to turn AXIOM off without switching to "custom") is silently dropped.
+			enabled: settings?.enabled ?? profile.enabled,
+			difficultyRouter: settings?.difficultyRouter ?? profile.difficultyRouter,
+			fastPath: settings?.fastPath ?? profile.fastPath,
+			trace: settings?.trace ?? profile.trace,
+			ipValidation: settings?.ipValidation ?? profile.ipValidation,
 			ipMaxRetries: settings?.ipMaxRetries ?? profile.ipMaxRetries,
 			ipStreaming: settings?.ipStreaming ?? profile.ipStreaming,
 			ipStreamingTimeoutMs: settings?.ipStreamingTimeoutMs ?? profile.ipStreamingTimeoutMs,
@@ -481,6 +547,9 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			knowledgeGraphMaxRecall: settings?.knowledgeGraphMaxRecall ?? profile.knowledgeGraphMaxRecall,
 			sparseTreeGrep: settings?.sparseTreeGrep ?? profile.sparseTreeGrep,
 			sparseTreeGrepMaxRecall: settings?.sparseTreeGrepMaxRecall ?? profile.sparseTreeGrepMaxRecall,
+			contextLedger: settings?.contextLedger ?? profile.contextLedger,
+			contextLedgerMaxTokens: settings?.contextLedgerMaxTokens ?? profile.contextLedgerMaxTokens,
+			benchmarkMode: settings?.benchmarkMode ?? profile.benchmarkMode,
 			repairLoop: settings?.repairLoop ?? profile.repairLoop,
 			repairLoopMaxAttempts: settings?.repairLoopMaxAttempts ?? profile.repairLoopMaxAttempts,
 			repairLoopTimeoutMs: settings?.repairLoopTimeoutMs ?? profile.repairLoopTimeoutMs,
@@ -495,6 +564,8 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			rStarExploration: settings?.rStarExploration ?? profile.rStarExploration,
 			conceptMaxRecall: settings?.conceptMaxRecall ?? profile.conceptMaxRecall,
 			bestOfN: settings?.bestOfN ?? profile.bestOfN,
+			autoRetrieval: settings?.autoRetrieval ?? profile.autoRetrieval,
+			autoRollback: settings?.autoRollback ?? profile.autoRollback,
 		};
 	}
 	return {
@@ -526,6 +597,9 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		knowledgeGraphMaxRecall: settings?.knowledgeGraphMaxRecall ?? 6,
 		sparseTreeGrep: settings?.sparseTreeGrep ?? true,
 		sparseTreeGrepMaxRecall: settings?.sparseTreeGrepMaxRecall ?? 8,
+		contextLedger: settings?.contextLedger ?? true,
+		contextLedgerMaxTokens: settings?.contextLedgerMaxTokens ?? 2200,
+		benchmarkMode: settings?.benchmarkMode ?? true,
 		repairLoop: settings?.repairLoop ?? true,
 		repairLoopMaxAttempts: settings?.repairLoopMaxAttempts ?? 2,
 		repairLoopTimeoutMs: settings?.repairLoopTimeoutMs ?? 20_000,
@@ -540,6 +614,8 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		rStarExploration: settings?.rStarExploration ?? 1.4,
 		conceptMaxRecall: settings?.conceptMaxRecall ?? 3,
 		bestOfN: settings?.bestOfN ?? 1,
+		autoRetrieval: settings?.autoRetrieval ?? true,
+		autoRollback: settings?.autoRollback ?? true,
 	};
 }
 
@@ -1476,6 +1552,9 @@ export class SettingsManager {
 			knowledgeGraphMaxRecall: current.knowledgeGraphMaxRecall,
 			sparseTreeGrep: current.sparseTreeGrep,
 			sparseTreeGrepMaxRecall: current.sparseTreeGrepMaxRecall,
+			contextLedger: current.contextLedger,
+			contextLedgerMaxTokens: current.contextLedgerMaxTokens,
+			benchmarkMode: current.benchmarkMode,
 			repairLoop: current.repairLoop,
 			repairLoopMaxAttempts: current.repairLoopMaxAttempts,
 			repairLoopTimeoutMs: current.repairLoopTimeoutMs,
@@ -1490,6 +1569,8 @@ export class SettingsManager {
 			rStarExploration: current.rStarExploration,
 			conceptMaxRecall: current.conceptMaxRecall,
 			bestOfN: current.bestOfN,
+			autoRetrieval: current.autoRetrieval,
+			autoRollback: current.autoRollback,
 		};
 		nextAxiomSettings[feature] = enabled;
 

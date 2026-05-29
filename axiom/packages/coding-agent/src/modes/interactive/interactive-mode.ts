@@ -2714,6 +2714,22 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "axiom_auto_rollback": {
+				this.showStatus(
+					`AXIOM auto-rollback: verifier regressed (${event.previousIssueCount} -> ${event.currentIssueCount} issues); working tree reverted to last good state`,
+				);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "axiom_subgoal_verify_failed": {
+				this.showStatus(
+					`AXIOM subgoal ${event.nodeId} (${event.description.slice(0, 80)}): verifyClaim failed (exit ${event.exitCode})`,
+				);
+				this.ui.requestRender();
+				break;
+			}
+
 			case "message_start":
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);

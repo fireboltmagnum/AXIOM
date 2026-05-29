@@ -325,12 +325,13 @@ function toGraphNodes(path: SearchNode[]): AxiomGraphNode[] {
 		id: `n${index + 1}`,
 		description: node.action || node.summary,
 		dependencies: index === 0 ? [] : [`n${index}`],
-		depth: 1,
+		parentId: index === 0 ? undefined : `n${index}`,
+		depth: index + 1,
 		atomic: Boolean(node.terminal) || index === path.length - 1,
 		successCriteria: node.terminal
 			? "The selected concrete move is complete and verified."
-			: "The next selected search move is ready.",
-		output: node.terminal ? "Completed atomic action." : "Prepared execution step.",
+			: `The next selected rStar move is ready: ${node.summary}.`,
+		output: node.terminal ? "Completed atomic action." : "Prepared execution step with dependencies preserved.",
 		expectedTool: node.expectedTool,
 		status: "pending" as const,
 	}));

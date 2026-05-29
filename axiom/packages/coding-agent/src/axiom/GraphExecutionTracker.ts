@@ -69,6 +69,42 @@ export class GraphExecutionTracker {
 		};
 	}
 
+	/**
+	 * Look up a node by id. Used by the agent session to fetch the node for
+	 * verifyClaim execution between onToolEnd and the model's next turn.
+	 */
+	getNodeById(nodeId: string): AxiomGraphNode | undefined {
+		return this.graph.nodes.find((node) => node.id === nodeId);
+	}
+
+	/**
+	 * Apply a verifyClaim result to a node that just transitioned to
+	 * `complete`. On a passing verification we just stash the exit code so
+	 * the trace can show "yes, this was actually done." On a failing
+	 * verification we flip the node back to `failed` so dependent subgoals
+	 * don't proceed on a phantom success.
+	 *
+	 * Returns the updated node, or undefined if no node exists or the node
+	 * wasn't in a state we should be acting on.
+	 */
+	applyVerification(
+		nodeId: string,
+		result: { passed: boolean; exitCode: number; stderrTail?: string },
+	): AxiomGraphNode | undefined {
+		const node = this.getNodeById(nodeId);
+		if (!node) return undefined;
+		node.verifyExitCode = result.exitCode;
+		node.verifyPassed = result.passed;
+		if (!result.passed && node.status === "complete") {
+			node.status = "failed";
+			node.error = capError(
+				`verifyClaim failed (exit ${result.exitCode})${result.stderrTail ? `: ${result.stderrTail}` : ""}`,
+			);
+			node.completedAt = new Date().toISOString();
+		}
+		return node;
+	}
+
 	snapshot(): AxiomGraphExecutionSnapshot {
 		const pending: string[] = [];
 		const inProgress: string[] = [];

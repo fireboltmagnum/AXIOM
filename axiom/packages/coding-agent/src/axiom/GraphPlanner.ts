@@ -90,7 +90,8 @@ Reply with this exact JSON shape and nothing else:
       "atomic": true,
       "successCriteria": "Specific measurable completion condition",
       "output": "One concrete artifact or result",
-      "expectedTool": "rg"
+      "expectedTool": "rg",
+      "verifyClaim": "grep -q 'newFunction' src/foo.ts"
     }
   ]
 }
@@ -102,7 +103,8 @@ Rules:
 - dependencies must reference earlier node ids only (no cycles). Dependencies should point to prerequisite sibling/leaf work, not parent/child containment.
 - Every non-atomic node must have at least one child via parentId.
 - Every atomic node must have successCriteria and output.
-- "expectedTool" is optional; omit it if unsure.`;
+- "expectedTool" is optional; omit it if unsure.
+- "verifyClaim" is optional but STRONGLY ENCOURAGED for atomic nodes: a bash one-liner whose exit 0 proves the node is done. Use READ-ONLY checks only (grep, test -f, npm run lint --silent, rg -q, file, stat). Never use rm/mv/git push/curl/etc. If you cannot author a deterministic check, OMIT verifyClaim — do not guess.`;
 };
 
 function extractJson(text: string): string | null {
@@ -147,6 +149,7 @@ interface RawNode {
 	successCriteria?: unknown;
 	output?: unknown;
 	expectedTool?: unknown;
+	verifyClaim?: unknown;
 }
 
 function inferParentId(id: string, seenIds: Set<string>): string | undefined {
@@ -238,6 +241,10 @@ function parseGraphJson(raw: string, startedAt: number, allowedTools: Set<string
 			output: typeof node.output === "string" && node.output.trim().length > 0 ? node.output.trim() : undefined,
 			expectedTool:
 				expectedTool && allowedTools.size > 0 && !allowedTools.has(expectedTool) ? undefined : expectedTool,
+			verifyClaim:
+				typeof node.verifyClaim === "string" && node.verifyClaim.trim().length > 0
+					? node.verifyClaim.trim()
+					: undefined,
 			status: "pending",
 		});
 	}

@@ -45,6 +45,7 @@ function createSession(options: {
 			},
 			thinkingLevel: options.thinkingLevel ?? "off",
 		},
+		axiomSettings: { effort: "balanced" },
 		sessionManager: {
 			getEntries: () => entries,
 			getSessionName: () => options.sessionName,

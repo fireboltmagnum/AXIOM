@@ -125,6 +125,36 @@ export class CodeGraphStore {
 		};
 	}
 
+	/**
+	 * Distinct local FILE paths that are one import-hop from `fileLabelOrPath`,
+	 * across all indexed graphs. Used by localization to surface the caller/callee
+	 * of a file named in an issue (the bug is often the neighbour, not the named
+	 * file). Returns [] when no graph is indexed or the file is unknown — so call
+	 * sites can fold it in unconditionally as a no-op when graphs are absent.
+	 */
+	neighborFiles(fileLabelOrPath: string, limit = 12): string[] {
+		const target = toPosix(fileLabelOrPath).replace(/^\.\//, "");
+		const out = new Set<string>();
+		for (const graph of this.list()) {
+			const fileNode = graph.nodes.find(
+				(node) =>
+					node.kind === "file" && (toPosix(node.path ?? "") === target || node.label === fileLabelOrPath),
+			);
+			if (!fileNode) continue;
+			const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+			for (const edge of incidentEdges(graph, fileNode.id)) {
+				const otherId = edge.fromId === fileNode.id ? edge.toId : edge.fromId;
+				const other = nodeById.get(otherId);
+				if (other?.kind !== "file" || !other.path) continue; // skip symbols/external modules
+				const otherPath = toPosix(other.path);
+				if (otherPath === target) continue;
+				out.add(otherPath);
+				if (out.size >= limit) return [...out];
+			}
+		}
+		return [...out];
+	}
+
 	path(graphId: string, fromLabelOrId: string, toLabelOrId: string, maxDepth = 5): CodeGraphPathResult | undefined {
 		const graph = this.require(graphId);
 		const start = findNode(graph, fromLabelOrId);

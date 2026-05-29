@@ -2,6 +2,7 @@ import type { AgentTool } from "@axiom/agent-core";
 import { Text } from "@axiom/tui";
 import { type Static, Type } from "typebox";
 import type {
+	AxiomSparseTreeGrepChunkDescription,
 	AxiomSparseTreeGrepHit,
 	AxiomSparseTreeGrepIndex,
 	AxiomSparseTreeGrepNode,
@@ -15,27 +16,33 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const sparseTreeGrepSchema = Type.Object({
 	action: Type.Union([
+		Type.Literal("compile"),
 		Type.Literal("index"),
 		Type.Literal("search"),
 		Type.Literal("expand"),
+		Type.Literal("describe"),
 		Type.Literal("extract"),
 		Type.Literal("stats"),
 	]),
 	path: Type.Optional(
 		Type.String({
-			description: "Document path for action=index. Supports text files, and PDFs if pdftotext is installed.",
+			description:
+				"Document path for action=compile/index. Supports text files, and PDFs if pdftotext is installed.",
 		}),
 	),
-	title: Type.Optional(Type.String({ description: "Optional display title for action=index" })),
+	title: Type.Optional(Type.String({ description: "Optional display title for action=compile/index" })),
 	query: Type.Optional(Type.String({ description: "Search query for action=search" })),
 	documentId: Type.Optional(Type.String({ description: "SparseTreeGrep document id" })),
-	nodeId: Type.Optional(Type.String({ description: "Tree node id for action=expand" })),
-	chunkId: Type.Optional(Type.String({ description: "Chunk id for action=extract" })),
-	around: Type.Optional(Type.Number({ description: "Number of neighboring chunks to include for action=extract" })),
+	nodeId: Type.Optional(Type.String({ description: "Tree node id for action=expand/describe" })),
+	chunkId: Type.Optional(Type.String({ description: "Chunk id for action=extract/describe" })),
+	around: Type.Optional(
+		Type.Number({ description: "Number of neighboring chunks to include for action=extract/describe" }),
+	),
 	limit: Type.Optional(Type.Number({ description: "Maximum results/nodes (default 8)" })),
 	maxBytes: Type.Optional(Type.Number({ description: "Maximum source bytes to index (default 8000000)" })),
 	maxChunks: Type.Optional(Type.Number({ description: "Maximum chunks to index (default 2000)" })),
 	extract: Type.Optional(Type.Boolean({ description: "For action=search, include exact text for the top hit" })),
+	force: Type.Optional(Type.Boolean({ description: "For action=describe, regenerate stored descriptions" })),
 });
 
 export type SparseTreeGrepToolInput = Static<typeof sparseTreeGrepSchema>;
@@ -45,6 +52,8 @@ export interface SparseTreeGrepToolDetails {
 	documentId?: string;
 	chunkCount?: number;
 	nodeCount?: number;
+	/** Set when index-time embeddings were computed (optional @xenova dep). */
+	embedderModel?: string;
 }
 
 function formatSparseTreeGrepCall(
@@ -91,11 +100,13 @@ export function createSparseTreeGrepToolDefinition(
 		name: "sparse_tree_grep",
 		label: "SparseTreeGrep",
 		description:
-			"Index and query non-code documents with an expandable SparseTreeGrep JSON tree. First search lightweight summaries, then expand nodes or extract exact byte-range chunks from the source.",
-		promptSnippet: "Index/search/extract non-code documents with SparseTreeGrep",
+			"Compile and query non-code documents with an expandable SparseTreeGrep JSON tree. First search lightweight summaries, lazily describe promising candidates, then extract exact byte-range chunks from the source.",
+		promptSnippet: "Compile/search/describe/extract non-code documents with SparseTreeGrep",
 		promptGuidelines: [
-			"Use sparse_tree_grep index for long non-code documents before answering detailed questions about them.",
-			"Use sparse_tree_grep search to find candidate pages/chunks cheaply, then sparse_tree_grep extract for exact source text.",
+			"Use sparse_tree_grep compile for long non-code documents before answering detailed questions about them.",
+			"Use sparse_tree_grep search to find candidate pages/chunks cheaply; it uses entity/phrase/action metadata plus semantic reranking across indexed documents when embeddings are available.",
+			"Use sparse_tree_grep describe on the best candidate chunks/nodes to lazily add compact scene/section descriptions before spending tokens on exact text.",
+			"After search, use sparse_tree_grep extract for exact source text before quoting or making fine-grained claims.",
 			"Do not use SparseTreeGrep for source code; use read/rg/understand_code for codebases.",
 		],
 		parameters: sparseTreeGrepSchema,
@@ -103,8 +114,8 @@ export function createSparseTreeGrepToolDefinition(
 		async execute(_toolCallId, params: SparseTreeGrepToolInput) {
 			const action = params.action;
 			const limit = Math.max(1, Math.min(50, Math.floor(params.limit ?? 8)));
-			if (action === "index") {
-				const index = store.indexDocument({
+			if (action === "index" || action === "compile") {
+				const index = await store.indexDocument({
 					path: resolveToCwd(requireParam(params.path, "path"), cwd),
 					title: params.title,
 					maxBytes: params.maxBytes,
@@ -114,11 +125,12 @@ export function createSparseTreeGrepToolDefinition(
 					documentId: index.documentId,
 					chunkCount: index.chunkCount,
 					nodeCount: index.nodes.length,
+					embedderModel: index.embedderModel,
 				});
 			}
 			if (action === "search") {
 				const query = requireParam(params.query, "query");
-				const hits = store.search(query, { documentId: params.documentId, limit });
+				const hits = await store.searchReranked(query, { documentId: params.documentId, limit });
 				let text = formatSearch(query, hits);
 				if (params.extract && hits[0]) {
 					const exact = store.extract(
@@ -131,6 +143,21 @@ export function createSparseTreeGrepToolDefinition(
 				return result(action, text, {
 					documentId: params.documentId,
 					chunkCount: hits.length,
+				});
+			}
+			if (action === "describe") {
+				const described = store.describe({
+					documentId: requireParam(params.documentId, "documentId"),
+					query: params.query,
+					nodeId: params.nodeId,
+					chunkIds: params.chunkId ? [params.chunkId] : undefined,
+					limit,
+					around: params.around,
+					force: params.force,
+				});
+				return result(action, formatDescribe(described.descriptions), {
+					documentId: described.index.documentId,
+					chunkCount: described.descriptions.length,
 				});
 			}
 			if (action === "expand") {
@@ -212,7 +239,7 @@ function formatIndex(index: AxiomSparseTreeGrepIndex, limit: number): string {
 function formatSearch(query: string, hits: AxiomSparseTreeGrepHit[]): string {
 	const out = [`Search: ${query}`];
 	if (hits.length === 0) {
-		out.push("No SparseTreeGrep hits found. Index the document first with action=index.");
+		out.push("No SparseTreeGrep hits found. Compile the document first with action=compile.");
 		return out.join("\n");
 	}
 	for (const hit of hits) {
@@ -224,6 +251,31 @@ function formatSearch(query: string, hits: AxiomSparseTreeGrepHit[]): string {
 		out.push(`  page ${hit.page}, lines ${hit.lineStart}-${hit.lineEnd}, bytes ${hit.byteStart}-${hit.byteEnd}`);
 		out.push(`  matched: ${hit.matchedKeywords.join(", ")}`);
 		out.push(`  ${hit.chunkSummary}`);
+	}
+	return out.join("\n");
+}
+
+function formatDescribe(
+	descriptions: Array<{ hit: AxiomSparseTreeGrepHit; description: AxiomSparseTreeGrepChunkDescription }>,
+): string {
+	const out = ["SparseTreeGrep descriptions:"];
+	if (descriptions.length === 0) {
+		out.push("- none");
+		return out.join("\n");
+	}
+	for (const { hit, description } of descriptions) {
+		out.push("");
+		out.push(`- ${hit.documentName} ${hit.chunkId}: ${description.title}`);
+		out.push(`  page ${hit.page}, lines ${hit.lineStart}-${hit.lineEnd}, bytes ${hit.byteStart}-${hit.byteEnd}`);
+		if (description.queryFocus) out.push(`  query focus: ${description.queryFocus}`);
+		out.push(`  ${description.description}`);
+		if (description.evidence.length) {
+			out.push("  evidence:");
+			for (const sentence of description.evidence.slice(0, 3)) out.push(`  - ${sentence}`);
+		}
+		if (description.neighborChunkIds.length) {
+			out.push(`  neighboring chunks: ${description.neighborChunkIds.join(", ")}`);
+		}
 	}
 	return out.join("\n");
 }

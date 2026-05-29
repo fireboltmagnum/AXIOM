@@ -1,7 +1,7 @@
 import type { AgentTool } from "@axiom/agent-core";
 import { Text } from "@axiom/tui";
 import { type Static, Type } from "typebox";
-import { type FlowGraphPathResult, FlowGraphStore } from "../../axiom/FlowGraphStore.ts";
+import { type FlowGraphPathResult, type FlowGraphSliceResult, FlowGraphStore } from "../../axiom/FlowGraphStore.ts";
 import type {
 	AxiomFlowGraph,
 	AxiomFlowGraphEdge,
@@ -25,13 +25,20 @@ const flowGraphSchema = Type.Object({
 		Type.Literal("debug"),
 		Type.Literal("trace"),
 		Type.Literal("explain"),
+		Type.Literal("slice"),
 		Type.Literal("stats"),
 	]),
 	path: Type.Optional(Type.String({ description: "File or directory for action=analyze/effects" })),
 	entry: Type.Optional(Type.String({ description: "Optional entrypoint label for action=analyze" })),
 	query: Type.Optional(Type.String({ description: "Search query for action=search/data/effects" })),
 	graphId: Type.Optional(Type.String({ description: "Specific flow graph id to query" })),
-	node: Type.Optional(Type.String({ description: "Node label/path/id for action=explain" })),
+	node: Type.Optional(Type.String({ description: "Node label/path/id for action=explain/slice" })),
+	mode: Type.Optional(
+		Type.Union([
+			Type.Literal("summary", { description: "Compact expandable overview" }),
+			Type.Literal("expanded", { description: "Expanded local slice around node/query" }),
+		]),
+	),
 	from: Type.Optional(Type.String({ description: "Start node label/path/id for action=path" })),
 	to: Type.Optional(Type.String({ description: "Target node label/path/id for action=path" })),
 	command: Type.Optional(Type.String({ description: "Command to run for action=debug/trace" })),
@@ -106,6 +113,7 @@ export function createFlowGraphToolDefinition(
 		promptGuidelines: [
 			"Use flow_graph analyze in rigorous mode when behavior matters: execution path, data movement, effects, event handlers, or debugging.",
 			"Use flow_graph path/from/to to connect entrypoints, callbacks, model calls, tool calls, or failing symbols.",
+			"Use flow_graph slice for an expandable flow-chart view: summary first, then pass node=... mode=expanded for more detail.",
 			"Use flow_graph data/effects to inspect where values, I/O, network, subprocesses, env vars, and global state are touched.",
 			"Use flow_graph debug/trace only when running the command is useful and acceptable; it executes the command with a timeout and maps stack traces back to saved flow graphs.",
 			"Use understand_code for per-file summaries and code_graph for repo relationships; use flow_graph for behavior and movement through code.",
@@ -171,6 +179,16 @@ export function createFlowGraphToolDefinition(
 				const hit = store.explain(graphId, node, limit);
 				const text = hit ? formatHits(`Explain: ${node}`, [hit]) : `No flow node found for: ${node}`;
 				return result(action, text, hit?.graph ?? store.load(graphId));
+			}
+
+			if (action === "slice") {
+				const graphId = params.graphId ?? requireLatestGraphId(store);
+				const slice = store.slice(graphId, params.node ?? params.query, {
+					mode: params.mode,
+					limit,
+					maxDepth: params.maxDepth,
+				});
+				return result(action, formatSlice(slice), slice.graph);
 			}
 
 			if (action === "debug" || action === "trace") {
@@ -303,6 +321,30 @@ function formatPath(from: string, to: string, pathResult: FlowGraphPathResult): 
 	}
 	for (const edge of pathResult.edges) {
 		out.push(`- ${formatEdge(edge, pathResult.graph)}`);
+	}
+	return out.join("\n");
+}
+
+function formatSlice(slice: FlowGraphSliceResult): string {
+	const out = [`Flow slice: ${slice.mode}`, `Graph: ${slice.graph.id} (${slice.graph.rootPath})`];
+	if (slice.focus) out.push(`Focus: ${nodeText(slice.focus)}`);
+	for (const section of slice.sections) {
+		out.push("");
+		out.push(`# ${section.title}`);
+		for (const node of section.nodes.slice(0, 12)) {
+			out.push(`- ${nodeText(node)}`);
+			if (node.summary) out.push(`  ${node.summary}`);
+		}
+		for (const edge of section.edges.slice(0, 18)) {
+			out.push(`- ${formatEdge(edge, slice.graph)}`);
+		}
+	}
+	if (slice.expansionHints.length > 0) {
+		out.push("");
+		out.push("# Expand next");
+		for (const hint of slice.expansionHints) {
+			out.push(`- node="${hint.node.label}" (${hint.reason})`);
+		}
 	}
 	return out.join("\n");
 }

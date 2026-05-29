@@ -45,6 +45,22 @@ export interface FlowGraphPathResult {
 	edges: AxiomFlowGraphEdge[];
 }
 
+export type FlowGraphSliceMode = "summary" | "expanded";
+
+export interface FlowGraphSliceSection {
+	title: string;
+	nodes: AxiomFlowGraphNode[];
+	edges: AxiomFlowGraphEdge[];
+}
+
+export interface FlowGraphSliceResult {
+	graph: AxiomFlowGraph;
+	mode: FlowGraphSliceMode;
+	focus?: AxiomFlowGraphNode;
+	sections: FlowGraphSliceSection[];
+	expansionHints: Array<{ node: AxiomFlowGraphNode; reason: string }>;
+}
+
 export interface FlowGraphDebugOptions {
 	command: string;
 	cwd: string;
@@ -179,6 +195,24 @@ export class FlowGraphStore {
 			nodes: [node, ...neighborNodes(graph, node.id, edges)],
 			edges,
 		};
+	}
+
+	slice(
+		graphId: string,
+		nodeLabelOrId?: string,
+		options?: { mode?: FlowGraphSliceMode; limit?: number; maxDepth?: number },
+	): FlowGraphSliceResult {
+		const graph = this.require(graphId);
+		const limit = Math.max(1, Math.min(80, Math.floor(options?.limit ?? 10)));
+		const mode = options?.mode ?? (nodeLabelOrId ? "expanded" : "summary");
+		const focus = nodeLabelOrId ? findNode(graph, nodeLabelOrId) : undefined;
+		if (mode === "expanded" && focus) {
+			return expandedSlice(graph, focus, {
+				limit,
+				maxDepth: Math.max(1, Math.min(5, Math.floor(options?.maxDepth ?? 2))),
+			});
+		}
+		return summarySlice(graph, limit, focus);
 	}
 
 	path(graphId: string, fromLabelOrId: string, toLabelOrId: string, maxDepth = 6): FlowGraphPathResult | undefined {
@@ -363,9 +397,18 @@ function buildGraph(files: FlowSourceFile[]): { nodes: AxiomFlowGraphNode[]; edg
 			});
 			pushEdge("contains", fileNode.id, symbolNode.id, symbol.kind, symbol.line, 1);
 			symbolNodeByFileAndName.set(`${u.path}:${symbol.name}`, symbolNode);
+			const simpleSymbolName = symbol.name.split(".").pop();
+			if (simpleSymbolName && simpleSymbolName !== symbol.name) {
+				symbolNodeByFileAndName.set(`${u.path}:${simpleSymbolName}`, symbolNode);
+			}
 			const byName = symbolNodesByName.get(symbol.name) ?? [];
 			byName.push(symbolNode);
 			symbolNodesByName.set(symbol.name, byName);
+			if (simpleSymbolName && simpleSymbolName !== symbol.name) {
+				const simpleByName = symbolNodesByName.get(simpleSymbolName) ?? [];
+				simpleByName.push(symbolNode);
+				symbolNodesByName.set(simpleSymbolName, simpleByName);
+			}
 
 			for (const param of extractParamNames(symbol.signature ?? "")) {
 				const dataNode = getNode("data", param, {
@@ -554,6 +597,127 @@ function scanFlowSource(
 	}
 }
 
+function summarySlice(graph: AxiomFlowGraph, limit: number, focus?: AxiomFlowGraphNode): FlowGraphSliceResult {
+	const executionEdges = graph.edges.filter((edge) => edge.kind === "calls" || edge.kind === "awaits").slice(0, limit);
+	const dataEdges = graph.edges
+		.filter((edge) => edge.kind === "uses" || edge.kind === "transforms" || edge.kind === "returns")
+		.slice(0, limit);
+	const effectEdges = graph.edges
+		.filter((edge) =>
+			["reads", "writes", "sends", "runs", "mutates", "throws", "catches", "listens", "emits", "handles"].includes(
+				edge.kind,
+			),
+		)
+		.slice(0, limit);
+	const branchNodes = graph.nodes
+		.filter((node) => node.kind === "branch" || node.kind === "loop" || node.kind === "async")
+		.slice(0, limit);
+	const primaryNodes = graph.nodes
+		.filter((node) => node.kind === "function" || node.kind === "method" || node.kind === "class")
+		.sort(
+			(a, b) =>
+				incidentEdges(graph, b.id).length - incidentEdges(graph, a.id).length || (a.line ?? 0) - (b.line ?? 0),
+		)
+		.slice(0, limit);
+	return {
+		graph,
+		mode: "summary",
+		focus,
+		sections: [
+			{ title: "Primary execution nodes", nodes: primaryNodes, edges: [] },
+			{ title: "Execution calls / async", nodes: nodesForEdges(graph, executionEdges), edges: executionEdges },
+			{ title: "Data movement", nodes: nodesForEdges(graph, dataEdges), edges: dataEdges },
+			{ title: "Effects / events / errors", nodes: nodesForEdges(graph, effectEdges), edges: effectEdges },
+			{ title: "Branches / loops / async boundaries", nodes: branchNodes, edges: [] },
+		].filter((section) => section.nodes.length > 0 || section.edges.length > 0),
+		expansionHints: expansionHints(graph, primaryNodes, limit),
+	};
+}
+
+function expandedSlice(
+	graph: AxiomFlowGraph,
+	focus: AxiomFlowGraphNode,
+	options: { limit: number; maxDepth: number },
+): FlowGraphSliceResult {
+	const edgeIds = new Set<string>();
+	const nodeIds = new Set<string>([focus.id]);
+	const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: focus.id, depth: 0 }];
+	while (queue.length > 0 && nodeIds.size < options.limit * 4) {
+		const current = queue.shift()!;
+		if (current.depth >= options.maxDepth) continue;
+		for (const edge of incidentEdges(graph, current.nodeId)) {
+			if (edgeIds.size >= options.limit * 6) break;
+			edgeIds.add(edge.id);
+			const nextId = edge.fromId === current.nodeId ? edge.toId : edge.fromId;
+			if (!nodeIds.has(nextId)) {
+				nodeIds.add(nextId);
+				queue.push({ nodeId: nextId, depth: current.depth + 1 });
+			}
+		}
+	}
+	const nodes = graph.nodes.filter((node) => nodeIds.has(node.id));
+	const edges = graph.edges.filter((edge) => edgeIds.has(edge.id));
+	const byKind = (kinds: AxiomFlowGraphEdgeKind[]) => edges.filter((edge) => kinds.includes(edge.kind));
+	const execution = byKind(["calls", "awaits", "branches", "loops"]);
+	const data = byKind(["uses", "transforms", "returns"]);
+	const effects = byKind([
+		"reads",
+		"writes",
+		"sends",
+		"runs",
+		"mutates",
+		"throws",
+		"catches",
+		"listens",
+		"emits",
+		"handles",
+	]);
+	return {
+		graph,
+		mode: "expanded",
+		focus,
+		sections: [
+			{ title: `Focus: ${focus.label}`, nodes: [focus], edges: [] },
+			{ title: "Execution slice", nodes: nodesForEdges(graph, execution), edges: execution },
+			{ title: "Data slice", nodes: nodesForEdges(graph, data), edges: data },
+			{ title: "Effect / event / error slice", nodes: nodesForEdges(graph, effects), edges: effects },
+			{
+				title: "Other neighboring nodes",
+				nodes: nodes.filter(
+					(node) =>
+						node.id !== focus.id && !edges.some((edge) => edge.fromId === node.id || edge.toId === node.id),
+				),
+				edges: [],
+			},
+		].filter((section) => section.nodes.length > 0 || section.edges.length > 0),
+		expansionHints: expansionHints(
+			graph,
+			nodes.filter((node) => node.id !== focus.id),
+			options.limit,
+		),
+	};
+}
+
+function nodesForEdges(graph: AxiomFlowGraph, edges: AxiomFlowGraphEdge[]): AxiomFlowGraphNode[] {
+	const ids = new Set(edges.flatMap((edge) => [edge.fromId, edge.toId]));
+	return graph.nodes.filter((node) => ids.has(node.id));
+}
+
+function expansionHints(
+	graph: AxiomFlowGraph,
+	nodes: AxiomFlowGraphNode[],
+	limit: number,
+): Array<{ node: AxiomFlowGraphNode; reason: string }> {
+	return dedupeNodes(nodes)
+		.filter((node) => node.kind !== "file")
+		.sort((a, b) => incidentEdges(graph, b.id).length - incidentEdges(graph, a.id).length)
+		.slice(0, Math.max(1, Math.min(8, limit)))
+		.map((node) => ({
+			node,
+			reason: `${incidentEdges(graph, node.id).length} connected flow edge(s)`,
+		}));
+}
+
 function resolveCallTarget(
 	sourceFilePath: string,
 	callName: string,
@@ -623,8 +787,12 @@ function extractEffects(line: string): Array<{ edgeKind: AxiomFlowGraphEdgeKind;
 	) {
 		effects.push({ edgeKind: "writes", label: `file-write:${extractStringArg(line) ?? "unknown"}` });
 	}
+	const envName = extractEnvName(line);
 	if (/\bprocess\.env\b|\bDeno\.env\b/.test(line)) {
-		effects.push({ edgeKind: "reads", label: "env-read" });
+		effects.push({
+			edgeKind: /\bprocess\.env\.[A-Za-z_$][\w$]*\s*=/.test(line) ? "writes" : "reads",
+			label: `env:${envName ?? "unknown"}`,
+		});
 	}
 	if (/\b(fetch|axios\.|http\.|https\.|request)\b/.test(line)) {
 		effects.push({ edgeKind: "sends", label: `network:${extractStringArg(line) ?? "request"}` });
@@ -660,6 +828,15 @@ function extractStringArg(line: string): string | undefined {
 	return match?.[1];
 }
 
+function extractEnvName(line: string): string | undefined {
+	return (
+		/process\.env\.([A-Za-z_$][\w$]*)/.exec(line)?.[1] ??
+		/process\.env\[['"`]([^'"`]+)['"`]\]/.exec(line)?.[1] ??
+		/Deno\.env\.get\(['"`]([^'"`]+)['"`]\)/.exec(line)?.[1] ??
+		/Deno\.env\.set\(['"`]([^'"`]+)['"`]\)/.exec(line)?.[1]
+	);
+}
+
 function extractParamNames(signature: string): string[] {
 	const match = /\(([^)]*)\)/.exec(signature);
 	if (!match) return [];
@@ -678,7 +855,14 @@ function extractParamNames(signature: string): string[] {
 }
 
 function isDeclarationLine(line: string): boolean {
-	return /^(export\s+)?(async\s+)?function\b|^(export\s+)?(abstract\s+)?class\b|^(export\s+)?interface\b|^(export\s+)?type\b/.test(
+	if (
+		/^(export\s+)?(async\s+)?function\b|^(export\s+)?(abstract\s+)?class\b|^(export\s+)?interface\b|^(export\s+)?type\b/.test(
+			line,
+		)
+	) {
+		return true;
+	}
+	return /^(public|private|protected|static|async|override|readonly|get|set|\s)*[A-Za-z_$][\w$]*\s*(?:<[^>]+>)?\s*\([^)]*\)\s*(?::[^{]+)?\{\s*$/.test(
 		line,
 	);
 }

@@ -408,6 +408,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		initialActiveToolNames,
 		allowedToolNames,
+		noBuiltinTools: options.noTools != null,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});
