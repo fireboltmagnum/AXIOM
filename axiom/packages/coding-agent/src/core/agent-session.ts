@@ -797,7 +797,35 @@ export class AgentSession {
 			verifierLadder: settings.benchmarkMode,
 			preEditSnapshots,
 		});
-		if (!result) return;
+		if (!result) {
+			const noVerifier = this._repairLoop.buildNoVerifierPacket({
+				changedFiles,
+				attempt: this._repairLoopAttempts + 1,
+				maxAttempts: settings.repairLoopMaxAttempts,
+				preEditSnapshots,
+			});
+			if (!noVerifier) return;
+			this._axiomRuntime.recordRepairAttempt(traceId, {
+				attempt: this._repairLoopAttempts + 1,
+				maxAttempts: settings.repairLoopMaxAttempts,
+				verifierCommand: "(none detected)",
+				verifierKind: "no-verifier",
+				passed: false,
+				exitCode: null,
+				timedOut: false,
+				durationMs: 0,
+				issueCount: 0,
+				signature: noVerifier.signature,
+				patchRiskLevel: noVerifier.patchRisk.level,
+				patchRiskScore: noVerifier.patchRisk.score,
+				patchRiskBlocked: noVerifier.patchRisk.shouldBlock,
+				patchRiskSignalCount: noVerifier.patchRisk.signals.length,
+			});
+			void this.sendUserMessage(noVerifier.packet, { deliverAs: "followUp" }).catch(() => {
+				// Fire-and-forget; matches verifier failure packets.
+			});
+			return;
+		}
 
 		const attemptIndex = this._repairLoopAttempts + (result.passed ? 0 : 1);
 		this._axiomRuntime.recordRepairAttempt(traceId, {

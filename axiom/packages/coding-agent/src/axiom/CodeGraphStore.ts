@@ -131,22 +131,36 @@ export class CodeGraphStore {
 	 * of a file named in an issue (the bug is often the neighbour, not the named
 	 * file). Returns [] when no graph is indexed or the file is unknown — so call
 	 * sites can fold it in unconditionally as a no-op when graphs are absent.
+	 *
+	 * Robust to the graph being indexed at a DIFFERENT root than the caller's
+	 * path space: a graph indexed at a subdir stores subdir-relative node paths
+	 * (e.g. "api.ts") while the caller passes a cwd-relative seed ("src/api.ts").
+	 * We match the seed by exact path, label, or path-suffix, and re-prefix
+	 * returned neighbours with the same root offset so they stay cwd-relative.
 	 */
 	neighborFiles(fileLabelOrPath: string, limit = 12): string[] {
 		const target = toPosix(fileLabelOrPath).replace(/^\.\//, "");
 		const out = new Set<string>();
 		for (const graph of this.list()) {
-			const fileNode = graph.nodes.find(
-				(node) =>
-					node.kind === "file" && (toPosix(node.path ?? "") === target || node.label === fileLabelOrPath),
-			);
+			let prefix = ""; // root offset between caller paths and graph paths
+			const fileNode = graph.nodes.find((node) => {
+				if (node.kind !== "file" || !node.path) return false;
+				const nodePath = toPosix(node.path);
+				if (nodePath === target || node.label === fileLabelOrPath) return true;
+				// Seed is deeper-rooted than the graph (graph indexed at a subdir).
+				if (target.endsWith(`/${nodePath}`)) {
+					prefix = target.slice(0, target.length - nodePath.length);
+					return true;
+				}
+				return false;
+			});
 			if (!fileNode) continue;
 			const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
 			for (const edge of incidentEdges(graph, fileNode.id)) {
 				const otherId = edge.fromId === fileNode.id ? edge.toId : edge.fromId;
 				const other = nodeById.get(otherId);
 				if (other?.kind !== "file" || !other.path) continue; // skip symbols/external modules
-				const otherPath = toPosix(other.path);
+				const otherPath = `${prefix}${toPosix(other.path)}`;
 				if (otherPath === target) continue;
 				out.add(otherPath);
 				if (out.size >= limit) return [...out];

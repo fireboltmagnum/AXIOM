@@ -5,6 +5,14 @@ import { analyzeFile } from "./CodeAnalyzer.ts";
 import { CodeGraphStore } from "./CodeGraphStore.ts";
 import { type FailureFingerprintHit, FailureFingerprintStore } from "./FailureFingerprintStore.ts";
 import { FlowGraphStore } from "./FlowGraphStore.ts";
+import {
+	type EditTarget,
+	extractLocationHints,
+	type FingerprintFileHit,
+	LocalizationEngine,
+	type LexicalFileScore,
+	type LocationHint,
+} from "./LocalizationEngine.ts";
 import { assessPatchRisk, type PatchRiskReport, type PatchRiskSnapshot } from "./PatchRiskGate.ts";
 
 export const AXIOM_REPAIR_LOOP_TAG = "<axiom_internal_repair_loop>";
@@ -42,6 +50,13 @@ export interface RepairRunResult {
 	signature: string;
 	memoryHints: FailureFingerprintHit[];
 	patchRisk: PatchRiskReport;
+	packet: string;
+}
+
+export interface RepairNoVerifierResult {
+	changedFiles: string[];
+	patchRisk: PatchRiskReport;
+	signature: string;
 	packet: string;
 }
 
@@ -223,6 +238,52 @@ export class RepairLoop {
 		return lastPassed;
 	}
 
+	buildNoVerifierPacket(options: {
+		changedFiles: readonly string[];
+		attempt: number;
+		maxAttempts: number;
+		preEditSnapshots?: ReadonlyMap<string, PatchRiskSnapshot>;
+	}): RepairNoVerifierResult | undefined {
+		const changedCodeFiles = options.changedFiles.filter((file) => CODE_EXTENSIONS.has(path.extname(file)));
+		if (changedCodeFiles.length === 0) return undefined;
+		const patchRisk = assessPatchRisk({
+			cwd: this.cwd,
+			changedFiles: changedCodeFiles,
+			preEditSnapshots: options.preEditSnapshots,
+			verifierPassed: false,
+		});
+		const signature = `no-verifier:${changedCodeFiles.map((file) => path.relative(this.cwd, file)).join("|")}:risk=${patchRisk.level}:${patchRisk.score}`;
+		const lines = [
+			AXIOM_REPAIR_LOOP_TAG,
+			"AXIOM Verification Evidence Gate: code was edited, but no automatic verifier could be detected.",
+			`Attempt: ${options.attempt}/${options.maxAttempts}`,
+			`Changed code files: ${changedCodeFiles.map((file) => path.relative(this.cwd, file)).join(", ")}`,
+			"Verifier: none detected",
+			"Do not claim the task is done yet. First run a relevant verifier manually (test/typecheck/lint/build) or state exactly why no verifier exists.",
+		];
+		if (patchRisk.signals.length > 0) {
+			lines.push("");
+			lines.push("Patch Risk Gate:");
+			lines.push(`- level=${patchRisk.level}; score=${patchRisk.score}; blocked=${patchRisk.shouldBlock}`);
+			for (const signal of patchRisk.signals.slice(0, 6)) {
+				lines.push(
+					`- ${signal.severity} ${signal.file}: ${signal.message} ${signal.reason} (+${signal.addedLines}/-${signal.deletedLines})`,
+				);
+			}
+		}
+		lines.push("");
+		lines.push(
+			"Next action: inspect the project scripts/config and run the cheapest meaningful check. If no verifier exists, tell the user validation is missing instead of presenting the patch as verified.",
+		);
+		lines.push(AXIOM_REPAIR_LOOP_END_TAG);
+		return {
+			changedFiles: changedCodeFiles,
+			patchRisk,
+			signature,
+			packet: lines.join("\n"),
+		};
+	}
+
 	private async runSingleVerifier(
 		verifier: RepairVerifier,
 		options: {
@@ -369,6 +430,22 @@ export class RepairLoop {
 			lines.push("Parsed failures: none; inspect stderr/stdout tails below.");
 		}
 
+		// Fused localization: rank the most likely edit sites across all signals
+		// (parsed-failure files + stack traces + call-graph neighbours + recalled
+		// prior-failure files). Localization is the dominant repair failure mode;
+		// a single ranked "edit here" list beats scattered hints.
+		const targets = this.buildLocalizationTargets(result);
+		if (targets.length > 0) {
+			lines.push("");
+			lines.push("Most likely edit targets (localization):");
+			for (const target of targets) {
+				const loc = target.line ? `${target.file}:${target.line}` : target.file;
+				const where = target.symbol ? ` (${target.symbol})` : "";
+				lines.push(`- ${loc}${where} — ${target.rationale.join("; ")}`);
+			}
+			lines.push("Start at the highest-ranked target; widen only if the fix proves to be elsewhere.");
+		}
+
 		if (result.memoryHints.length > 0) {
 			lines.push("");
 			lines.push("FailureFingerprintIndex recalls:");
@@ -421,6 +498,52 @@ export class RepairLoop {
 		);
 		lines.push(AXIOM_REPAIR_LOOP_END_TAG);
 		return lines.join("\n");
+	}
+
+	/**
+	 * Fuse the repair-time signals into one ranked edit-target list via
+	 * {@link LocalizationEngine}: parsed-failure files (+lines) and stack traces
+	 * are explicit hints, parsed-failure files seed call-graph neighbour
+	 * expansion, and recalled prior-failure files add a recurrence prior.
+	 */
+	private buildLocalizationTargets(result: RepairRunResult): EditTarget[] {
+		const toCwdRel = (file: string) => toPosixRel(this.cwd, path.resolve(result.verifier.cwd, file));
+
+		const hints: LocationHint[] = [];
+		const lexical: LexicalFileScore[] = [];
+		const seenLexical = new Set<string>();
+		for (const issue of result.issues) {
+			if (!issue.file) continue;
+			const rel = toCwdRel(issue.file);
+			hints.push({
+				file: rel,
+				line: issue.line,
+				symbol: issue.owner,
+				kind: issue.line ? "path-line" : "path",
+				confidence: issue.line ? 0.9 : 0.7,
+			});
+			if (!seenLexical.has(rel)) {
+				seenLexical.add(rel);
+				lexical.push({ file: rel, score: 3 });
+			}
+		}
+		const textHints = extractLocationHints(`${result.stderr}\n${result.stdout}`);
+
+		const fingerprints: FingerprintFileHit[] = [];
+		for (const hit of result.memoryHints) {
+			for (const file of hit.entry.files.slice(0, 4)) {
+				fingerprints.push({ file: toPosixRel(this.cwd, path.resolve(this.cwd, file)), recurrence: hit.entry.occurrences });
+			}
+		}
+
+		return new LocalizationEngine().localize({
+			hints: [...hints, ...textHints],
+			lexical,
+			neighboursOf: (file) => this.codeGraphStore.neighborFiles(file, 6),
+			fingerprints,
+			fileExists: (file) => existsSync(path.resolve(this.cwd, file)),
+			maxTargets: 6,
+		}).targets;
 	}
 
 	private relatedGraphHints(issues: readonly RepairIssue[]): string[] {
@@ -515,6 +638,11 @@ export function parseRepairIssues(output: string, cwd: string): RepairIssue[] {
 		}
 	}
 	return dedupeIssues(issues).slice(0, 20);
+}
+
+/** Relative path from `base` to `target`, normalised to posix separators. */
+function toPosixRel(base: string, target: string): string {
+	return path.relative(base, target).split(path.sep).join("/");
 }
 
 function detectPlaywrightVerifier(

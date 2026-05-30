@@ -195,6 +195,45 @@ describe("RepairLoop", () => {
 		expect(result?.packet).toContain("> 2 |   return missing;");
 	});
 
+	it("adds a fused localization section that surfaces a call-graph neighbour", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		writeFileSync(
+			join(testDir, "package.json"),
+			JSON.stringify({ scripts: { typecheck: "node verify.js" } }, null, 2),
+		);
+		// The error is in api.ts, but api.ts imports helper.ts — the neighbour
+		// should be surfaced as a candidate edit target.
+		writeFileSync(
+			join(testDir, "verify.js"),
+			"console.error(\"src/api.ts(3,10): error TS2304: Cannot find name 'missing'.\"); process.exit(2);\n",
+		);
+		writeFileSync(
+			join(testDir, "src", "api.ts"),
+			['import { helper } from "./helper";', "export function run() {", "  return missing;", "}"].join("\n"),
+		);
+		writeFileSync(join(testDir, "src", "helper.ts"), ["export function helper(): number {", "  return 1;", "}"].join("\n"));
+
+		const codeGraphStore = new CodeGraphStore(join(testDir, ".stores", "code"));
+		codeGraphStore.index({ path: testDir });
+
+		const loop = new RepairLoop({
+			cwd: testDir,
+			codeGraphStore,
+			flowGraphStore: new FlowGraphStore(join(testDir, ".stores", "flow")),
+		});
+		const result = await loop.run({
+			changedFiles: [join(testDir, "src", "api.ts")],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+		});
+
+		expect(result?.passed).toBe(false);
+		expect(result?.packet).toContain("Most likely edit targets (localization):");
+		expect(result?.packet).toContain("src/api.ts:3");
+		expect(result?.packet).toContain("call-graph neighbour of src/api.ts");
+	});
+
 	it("ranks likely root-cause failures above earlier symptom locations", async () => {
 		mkdirSync(join(testDir, "src"), { recursive: true });
 		writeFileSync(
@@ -255,6 +294,30 @@ describe("RepairLoop", () => {
 		expect(result?.patchRisk.shouldBlock).toBe(true);
 		expect(result?.packet).toContain("AXIOM Patch Risk Gate blocked a risky code edit");
 		expect(result?.packet).toContain("Introduced skipped or exclusive tests");
+	});
+
+	it("builds a verification evidence gate packet when code changed but no verifier exists", async () => {
+		mkdirSync(join(testDir, "src"), { recursive: true });
+		const changedFile = join(testDir, "src", "lonely.ts");
+		writeFileSync(changedFile, "export const value = 1;\n");
+
+		const loop = new RepairLoop({ cwd: testDir });
+		const result = await loop.run({
+			changedFiles: [changedFile],
+			timeoutMs: 3000,
+			attempt: 1,
+			maxAttempts: 2,
+		});
+		const noVerifier = loop.buildNoVerifierPacket({
+			changedFiles: [changedFile],
+			attempt: 1,
+			maxAttempts: 2,
+		});
+
+		expect(result).toBeUndefined();
+		expect(noVerifier?.signature).toContain("no-verifier:src/lonely.ts");
+		expect(noVerifier?.packet).toContain("AXIOM Verification Evidence Gate");
+		expect(noVerifier?.packet).toContain("Do not claim the task is done yet");
 	});
 
 	it("recalls repeated verifier failures through FailureFingerprintIndex", async () => {
