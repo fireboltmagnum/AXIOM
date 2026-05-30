@@ -108,6 +108,8 @@ export interface AxiomSettings {
 	ipStreaming?: boolean;
 	/** Per-chunk timeout (ms). Default 800; total budget per chunk is 1000ms. */
 	ipStreamingTimeoutMs?: number;
+	/** Validate/release streaming code after every N closed code chunks. Default 1. */
+	ipStreamingCheckEveryChunks?: number;
 	/** Max stream-aborts per task before this validator falls silent. Default 2. */
 	ipStreamingMaxAbortsPerTask?: number;
 	/**
@@ -273,6 +275,7 @@ export interface ResolvedAxiomSettings {
 	ipMaxRetries: number;
 	ipStreaming: boolean;
 	ipStreamingTimeoutMs: number;
+	ipStreamingCheckEveryChunks: number;
 	ipStreamingMaxAbortsPerTask: number;
 	reflexion: boolean;
 	stepBack: boolean;
@@ -325,6 +328,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		ipMaxRetries: 0,
 		ipStreaming: false,
 		ipStreamingTimeoutMs: 800,
+		ipStreamingCheckEveryChunks: 1,
 		ipStreamingMaxAbortsPerTask: 0,
 		reflexion: false,
 		stepBack: false,
@@ -373,6 +377,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		ipMaxRetries: 0,
 		ipStreaming: false,
 		ipStreamingTimeoutMs: 800,
+		ipStreamingCheckEveryChunks: 1,
 		ipStreamingMaxAbortsPerTask: 0,
 		reflexion: false,
 		stepBack: false,
@@ -421,6 +426,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		ipMaxRetries: 2,
 		ipStreaming: true,
 		ipStreamingTimeoutMs: 800,
+		ipStreamingCheckEveryChunks: 1,
 		ipStreamingMaxAbortsPerTask: 2,
 		reflexion: true,
 		stepBack: true,
@@ -469,6 +475,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		ipMaxRetries: 3,
 		ipStreaming: true,
 		ipStreamingTimeoutMs: 900,
+		ipStreamingCheckEveryChunks: 1,
 		ipStreamingMaxAbortsPerTask: 3,
 		reflexion: true,
 		stepBack: true,
@@ -528,6 +535,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			ipMaxRetries: settings?.ipMaxRetries ?? profile.ipMaxRetries,
 			ipStreaming: settings?.ipStreaming ?? profile.ipStreaming,
 			ipStreamingTimeoutMs: settings?.ipStreamingTimeoutMs ?? profile.ipStreamingTimeoutMs,
+			ipStreamingCheckEveryChunks: settings?.ipStreamingCheckEveryChunks ?? profile.ipStreamingCheckEveryChunks,
 			ipStreamingMaxAbortsPerTask: settings?.ipStreamingMaxAbortsPerTask ?? profile.ipStreamingMaxAbortsPerTask,
 			reflexion: settings?.reflexion ?? profile.reflexion,
 			stepBack: settings?.stepBack ?? profile.stepBack,
@@ -578,6 +586,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		ipMaxRetries: settings?.ipMaxRetries ?? 2,
 		ipStreaming: settings?.ipStreaming ?? true,
 		ipStreamingTimeoutMs: settings?.ipStreamingTimeoutMs ?? 800,
+		ipStreamingCheckEveryChunks: settings?.ipStreamingCheckEveryChunks ?? 1,
 		ipStreamingMaxAbortsPerTask: settings?.ipStreamingMaxAbortsPerTask ?? 2,
 		reflexion: settings?.reflexion ?? true,
 		stepBack: settings?.stepBack ?? true,
@@ -1533,6 +1542,7 @@ export class SettingsManager {
 			ipMaxRetries: current.ipMaxRetries,
 			ipStreaming: current.ipStreaming,
 			ipStreamingTimeoutMs: current.ipStreamingTimeoutMs,
+			ipStreamingCheckEveryChunks: current.ipStreamingCheckEveryChunks,
 			ipStreamingMaxAbortsPerTask: current.ipStreamingMaxAbortsPerTask,
 			reflexion: current.reflexion,
 			stepBack: current.stepBack,

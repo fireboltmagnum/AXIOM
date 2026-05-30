@@ -33,7 +33,7 @@ import { GraphExecutionTracker } from "../axiom/GraphExecutionTracker.ts";
 import type { PatchRiskSnapshot } from "../axiom/PatchRiskGate.ts";
 import { RepairLoop } from "../axiom/RepairLoop.ts";
 import type { AxiomTaskClassification, AxiomTaskPlan } from "../axiom/RuntimeTypes.ts";
-import { StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
+import { StreamingIPOutputGate, StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
 import { SubgoalVerifier } from "../axiom/SubgoalVerifier.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
@@ -395,6 +395,7 @@ export class AgentSession {
 	/** Streaming code-chunk validator. Lives for the duration of one assistant
 	 * message; rebuilt on each `message_start`. */
 	private _axiomStreamValidator: StreamingIPValidator | undefined;
+	private _axiomStreamOutputGate: StreamingIPOutputGate | undefined;
 	/** Number of stream aborts the current task has already triggered. Capped
 	 * by ipStreamingMaxAbortsPerTask to prevent infinite abort loops. */
 	private _axiomStreamAbortsThisTask = 0;
@@ -1107,14 +1108,14 @@ export class AgentSession {
 	 * Idempotent — calling twice within the same message-start is a no-op.
 	 */
 	private _startStreamValidator(): void {
-		if (this._axiomStreamValidator) return;
+		if (this._axiomStreamValidator || this._axiomStreamOutputGate) return;
 		const axiomSettings = this.settingsManager.getAxiomSettings();
 		if (!axiomSettings.enabled || !axiomSettings.ipStreaming) return;
 		if (this._axiomStreamAbortsThisTask >= axiomSettings.ipStreamingMaxAbortsPerTask) return;
 		this._axiomStreamAbortPending = false;
-		this._axiomStreamValidator = new StreamingIPValidator({
+		this._axiomStreamOutputGate = new StreamingIPOutputGate({
 			timeoutMs: axiomSettings.ipStreamingTimeoutMs,
-			onChunkChecked: (result) => this._onStreamChunkChecked(result),
+			checkEveryChunks: axiomSettings.ipStreamingCheckEveryChunks,
 		});
 	}
 
@@ -1211,6 +1212,10 @@ export class AgentSession {
 				}
 			}
 		}
+
+		const axiomPreparedEvent = await this._prepareAxiomStreamingEvent(event);
+		if (!axiomPreparedEvent) return;
+		event = axiomPreparedEvent;
 
 		this._recordAxiomEvent(event);
 

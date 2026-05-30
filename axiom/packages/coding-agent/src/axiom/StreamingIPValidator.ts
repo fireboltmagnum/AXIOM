@@ -1,3 +1,4 @@
+import type { AssistantMessage, TextContent } from "@axiom/ai";
 import { pickCheckerForLanguage, runChecker } from "./code-checkers/index.ts";
 import type { FencedCodeBlock } from "./code-checkers/types.ts";
 
@@ -121,6 +122,134 @@ export class StreamingIPValidator {
 			await Promise.allSettled([...this.inFlight]);
 		}
 	}
+}
+
+export interface StreamingIPGateResult {
+	message: AssistantMessage;
+	checks: StreamingChunkCheckResult[];
+	failed?: StreamingChunkCheckResult;
+	visibleChars: number;
+}
+
+/**
+ * UI/output gate for streaming code. It lets normal prose and thinking stream,
+ * but holds fenced code blocks until their syntax check passes. This prevents
+ * the terminal from showing broken code that AXIOM is about to abort/retry.
+ */
+export class StreamingIPOutputGate {
+	private readonly timeoutMs: number;
+	private readonly checkEveryChunks: number;
+	private readonly checkedOkStarts = new Set<number>();
+	private readonly checkedFailedStarts = new Set<number>();
+
+	constructor(options: { timeoutMs: number; checkEveryChunks: number }) {
+		this.timeoutMs = options.timeoutMs;
+		this.checkEveryChunks = Math.max(1, Math.floor(options.checkEveryChunks));
+	}
+
+	async filter(message: AssistantMessage, force = false): Promise<StreamingIPGateResult> {
+		const fullText = collectAssistantText(message);
+		const blocks = extractClosedFencedBlocks(fullText);
+		const unchecked = blocks.filter(
+			(block) => !this.checkedOkStarts.has(block.startOffset) && !this.checkedFailedStarts.has(block.startOffset),
+		);
+		const checkCount = force
+			? unchecked.length
+			: Math.floor(unchecked.length / this.checkEveryChunks) * this.checkEveryChunks;
+		const checks: StreamingChunkCheckResult[] = [];
+		let failed: StreamingChunkCheckResult | undefined;
+
+		if (checkCount > 0) {
+			const batch = unchecked.slice(0, checkCount);
+			const results = await Promise.all(batch.map((block) => checkBlock(block, this.timeoutMs)));
+			for (const result of results) {
+				checks.push(result);
+				if (result.ok) {
+					this.checkedOkStarts.add(result.chunk.startOffset);
+					continue;
+				}
+				this.checkedFailedStarts.add(result.chunk.startOffset);
+				failed = result;
+				break;
+			}
+		}
+
+		const visibleChars = computeVisibleChars(fullText, blocks, this.checkedOkStarts);
+		return {
+			message: withVisibleAssistantText(message, fullText.slice(0, visibleChars)),
+			checks,
+			failed,
+			visibleChars,
+		};
+	}
+}
+
+async function checkBlock(block: FencedCodeBlock, timeoutMs: number): Promise<StreamingChunkCheckResult> {
+	const { checker, resolvedLang } = pickCheckerForLanguage(block.language);
+	const startedAt = Date.now();
+	const result = await runChecker(checker, block.code, timeoutMs);
+	return {
+		chunk: block,
+		resolvedLanguage: resolvedLang,
+		ok: result.ok,
+		line: result.line,
+		column: result.column,
+		message: result.message,
+		fixHint: result.fixHint,
+		latencyMs: Date.now() - startedAt,
+	};
+}
+
+function computeVisibleChars(text: string, blocks: readonly FencedCodeBlock[], checkedOkStarts: ReadonlySet<number>): number {
+	let visibleChars = text.length;
+	for (const block of blocks) {
+		if (!checkedOkStarts.has(block.startOffset)) {
+			visibleChars = Math.min(visibleChars, block.startOffset);
+			break;
+		}
+	}
+	const openFenceStart = findUnclosedFenceStart(text);
+	if (openFenceStart !== undefined) {
+		visibleChars = Math.min(visibleChars, openFenceStart);
+	}
+	return visibleChars;
+}
+
+function collectAssistantText(message: AssistantMessage): string {
+	return message.content
+		.filter((part): part is TextContent => part.type === "text")
+		.map((part) => part.text)
+		.join("");
+}
+
+function withVisibleAssistantText(message: AssistantMessage, visibleText: string): AssistantMessage {
+	let remaining = visibleText.length;
+	return {
+		...message,
+		content: message.content.map((part) => {
+			if (part.type !== "text") return part;
+			const take = Math.max(0, Math.min(remaining, part.text.length));
+			remaining -= take;
+			return { ...part, text: part.text.slice(0, take) };
+		}),
+	};
+}
+
+function findUnclosedFenceStart(text: string): number | undefined {
+	const fenceRe = /(^|\n)(```|~~~)[^\n`~]*\n/g;
+	let open: { marker: string; offset: number } | undefined;
+	let match: RegExpExecArray | null = fenceRe.exec(text);
+	while (match) {
+		const marker = match[2];
+		const offset = match.index + match[1].length;
+		if (!open) {
+			open = { marker, offset };
+		} else if (open.marker === marker) {
+			open = undefined;
+		}
+		match = fenceRe.exec(text);
+	}
+	return open?.offset;
 }
 
 /**

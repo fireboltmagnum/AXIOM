@@ -30,6 +30,8 @@ export interface AxiomRuntimeSettings {
 	ipStreaming: boolean;
 	/** Per-chunk hard timeout in ms. Total budget for one chunk check. */
 	ipStreamingTimeoutMs: number;
+	/** Validate and release streaming code output every N closed fenced code chunks. */
+	ipStreamingCheckEveryChunks: number;
 	/** Max stream-aborts allowed per task. After this, streaming validation goes silent. */
 	ipStreamingMaxAbortsPerTask: number;
 	reflexion: boolean;
