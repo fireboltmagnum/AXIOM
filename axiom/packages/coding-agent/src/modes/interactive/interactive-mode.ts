@@ -4040,6 +4040,10 @@ export class InteractiveMode {
 						this.session.setAxiomFeature(feature, enabled);
 						this.footer.invalidate();
 					},
+					onAxiomIpChunkThresholdChange: (chunks) => {
+						this.session.setAxiomStreamingCheckEveryChunks(chunks);
+						this.footer.invalidate();
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();

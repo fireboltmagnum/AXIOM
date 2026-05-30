@@ -9,8 +9,8 @@ import {
 	type EditTarget,
 	extractLocationHints,
 	type FingerprintFileHit,
-	LocalizationEngine,
 	type LexicalFileScore,
+	LocalizationEngine,
 	type LocationHint,
 } from "./LocalizationEngine.ts";
 import { assessPatchRisk, type PatchRiskReport, type PatchRiskSnapshot } from "./PatchRiskGate.ts";
@@ -532,7 +532,10 @@ export class RepairLoop {
 		const fingerprints: FingerprintFileHit[] = [];
 		for (const hit of result.memoryHints) {
 			for (const file of hit.entry.files.slice(0, 4)) {
-				fingerprints.push({ file: toPosixRel(this.cwd, path.resolve(this.cwd, file)), recurrence: hit.entry.occurrences });
+				fingerprints.push({
+					file: toPosixRel(this.cwd, path.resolve(this.cwd, file)),
+					recurrence: hit.entry.occurrences,
+				});
 			}
 		}
 

@@ -1,6 +1,6 @@
-import { type BestOfNSelection } from "./BestOfNCoordinator.ts";
+import type { BestOfNSelection } from "./BestOfNCoordinator.ts";
 import { RolloutCoordinator, type RolloutVerification } from "./RolloutCoordinator.ts";
-import { RolloutWorkspaceManager, type RolloutWorkspace } from "./RolloutWorkspaceManager.ts";
+import { type RolloutWorkspace, RolloutWorkspaceManager } from "./RolloutWorkspaceManager.ts";
 
 /**
  * Live parallel-rollout orchestration: the glue that turns the deterministic

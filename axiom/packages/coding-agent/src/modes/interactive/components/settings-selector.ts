@@ -94,6 +94,7 @@ export interface SettingsCallbacks {
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onAxiomEffortChange: (effort: AxiomEffortLevel) => void;
 	onAxiomFeatureChange: (feature: AxiomFeatureKey, enabled: boolean) => void;
+	onAxiomIpChunkThresholdChange: (chunks: number) => void;
 	onCancel: () => void;
 }
 
@@ -261,6 +262,13 @@ export class SettingsSelectorComponent extends Container {
 				description: "Run deterministic Integrity Point checks on final assistant messages",
 				currentValue: config.axiom.ipValidation ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "axiom-ip-stream-chunks",
+				label: "AXIOM IP chunks",
+				description: "Hold streamed code and validate/release it after this many fenced code chunks",
+				currentValue: String(config.axiom.ipStreamingCheckEveryChunks),
+				values: ["1", "2", "3", "4"],
 			},
 			{
 				id: "axiom-code-understanding",
@@ -617,6 +625,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "axiom-ip":
 						callbacks.onAxiomFeatureChange("ipValidation", newValue === "true");
+						break;
+					case "axiom-ip-stream-chunks":
+						callbacks.onAxiomIpChunkThresholdChange(Number.parseInt(newValue, 10));
 						break;
 					case "axiom-code-understanding":
 						callbacks.onAxiomFeatureChange("codeUnderstanding", newValue === "true");

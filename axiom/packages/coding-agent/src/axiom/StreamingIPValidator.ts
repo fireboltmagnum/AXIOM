@@ -200,7 +200,11 @@ async function checkBlock(block: FencedCodeBlock, timeoutMs: number): Promise<St
 	};
 }
 
-function computeVisibleChars(text: string, blocks: readonly FencedCodeBlock[], checkedOkStarts: ReadonlySet<number>): number {
+function computeVisibleChars(
+	text: string,
+	blocks: readonly FencedCodeBlock[],
+	checkedOkStarts: ReadonlySet<number>,
+): number {
 	let visibleChars = text.length;
 	for (const block of blocks) {
 		if (!checkedOkStarts.has(block.startOffset)) {

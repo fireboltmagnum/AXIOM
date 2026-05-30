@@ -33,7 +33,7 @@ import { GraphExecutionTracker } from "../axiom/GraphExecutionTracker.ts";
 import type { PatchRiskSnapshot } from "../axiom/PatchRiskGate.ts";
 import { RepairLoop } from "../axiom/RepairLoop.ts";
 import type { AxiomTaskClassification, AxiomTaskPlan } from "../axiom/RuntimeTypes.ts";
-import { StreamingIPOutputGate, StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
+import { StreamingIPOutputGate, type StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
 import { SubgoalVerifier } from "../axiom/SubgoalVerifier.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
@@ -1106,32 +1106,9 @@ export class AgentSession {
 		});
 	}
 
-	/**
-	 * Called from the StreamingIPValidator's background queue when a code chunk
-	 * has been parsed. On success we just trace it. On failure we abort the
-	 * stream and queue a hidden retry message for the next turn.
-	 *
-	 * Guards:
-	 *   1. Only the FIRST failing chunk per message acts (subsequent failures
-	 *      for the same message are swallowed — the model is already aborted).
-	 *   2. Abort budget enforced via `_axiomStreamAbortsThisTask`.
-	 */
-	private _onStreamChunkChecked(result: import("../axiom/StreamingIPValidator.ts").StreamingChunkCheckResult): void {
-		// Stale-callback guard: a checker (especially the python subprocess) can
-		// resolve hundreds of ms after the task it belongs to ended. Without this
-		// guard, that late callback would (a) record a `stream_check` event into
-		// an unrelated trace, and (b) queue a retry message that gets injected
-		// into whatever task the user runs NEXT. Bail completely if the trace is
-		// no longer active.
-		const traceId = this._activeAxiomTraceId;
-		if (!traceId) return;
-
-		this._axiomRuntime.recordStreamCheck(traceId, result);
-		if (result.ok) return;
-		this._handleStreamChunkFailure(result);
-	}
-
-	private _handleStreamChunkFailure(result: import("../axiom/StreamingIPValidator.ts").StreamingChunkCheckResult): void {
+	private _handleStreamChunkFailure(
+		result: import("../axiom/StreamingIPValidator.ts").StreamingChunkCheckResult,
+	): void {
 		const traceId = this._activeAxiomTraceId;
 		if (!traceId) return;
 		if (this._axiomStreamAbortPending) return;
@@ -1323,6 +1300,13 @@ export class AgentSession {
 			this._axiomStreamOutputGate = undefined;
 			this._axiomStreamValidator?.stop();
 			this._axiomStreamValidator = undefined;
+		}
+		if (event.type === "message_update") {
+			return {
+				...event,
+				message: filtered.message,
+				assistantMessageEvent: { ...event.assistantMessageEvent, partial: filtered.message },
+			} as AgentEvent;
 		}
 		return { ...event, message: filtered.message } as AgentEvent;
 	}
@@ -2733,6 +2717,13 @@ export class AgentSession {
 
 	setAxiomFeature(feature: AxiomFeatureKey, enabled: boolean): ResolvedAxiomSettings {
 		const settings = this.settingsManager.setAxiomFeature(feature, enabled);
+		this._refreshAxiomRuntime();
+		this._emit({ type: "axiom_effort_changed", settings });
+		return settings;
+	}
+
+	setAxiomStreamingCheckEveryChunks(chunks: number): ResolvedAxiomSettings {
+		const settings = this.settingsManager.setAxiomStreamingCheckEveryChunks(chunks);
 		this._refreshAxiomRuntime();
 		this._emit({ type: "axiom_effort_changed", settings });
 		return settings;

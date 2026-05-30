@@ -211,7 +211,10 @@ describe("RepairLoop", () => {
 			join(testDir, "src", "api.ts"),
 			['import { helper } from "./helper";', "export function run() {", "  return missing;", "}"].join("\n"),
 		);
-		writeFileSync(join(testDir, "src", "helper.ts"), ["export function helper(): number {", "  return 1;", "}"].join("\n"));
+		writeFileSync(
+			join(testDir, "src", "helper.ts"),
+			["export function helper(): number {", "  return 1;", "}"].join("\n"),
+		);
 
 		const codeGraphStore = new CodeGraphStore(join(testDir, ".stores", "code"));
 		codeGraphStore.index({ path: testDir });

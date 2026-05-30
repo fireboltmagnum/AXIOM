@@ -13,7 +13,15 @@ function git(cwd: string, args: string[]) {
 }
 
 function verification(over: Partial<RolloutVerification>): RolloutVerification {
-	return { passed: false, issueCount: 1, changedFileCount: 1, signature: "s", verifierCommand: "t", durationMs: 1, ...over };
+	return {
+		passed: false,
+		issueCount: 1,
+		changedFileCount: 1,
+		signature: "s",
+		verifierCommand: "t",
+		durationMs: 1,
+		...over,
+	};
 }
 
 describe("ParallelRolloutOrchestrator", () => {
@@ -88,8 +96,7 @@ describe("ParallelRolloutOrchestrator", () => {
 		const result = await orch.run({
 			runAgent: async (ws) => writeFileSync(join(ws.dir, "src", "a.ts"), `export const value = ${ws.index};\n`),
 			// All pass; rollout 1 changed the fewest files.
-			verify: async (ws) =>
-				verification({ passed: true, issueCount: 0, changedFileCount: ws.index === 1 ? 1 : 5 }),
+			verify: async (ws) => verification({ passed: true, issueCount: 0, changedFileCount: ws.index === 1 ? 1 : 5 }),
 		});
 		expect(result.winnerIndex).toBe(1);
 		expect(readFileSync(join(repo, "src", "a.ts"), "utf-8")).toContain("= 1");
