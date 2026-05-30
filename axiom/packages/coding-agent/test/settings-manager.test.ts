@@ -25,6 +25,25 @@ describe("SettingsManager", () => {
 		}
 	});
 
+	describe("parallelRollouts setting", () => {
+		it("defaults to 1 (disabled) across effort levels", () => {
+			for (const effort of ["off", "fast", "balanced", "rigorous"] as const) {
+				const manager = SettingsManager.inMemory({ axiom: { effort } });
+				expect(manager.getAxiomSettings().parallelRollouts).toBe(1);
+			}
+		});
+
+		it("honors an explicit override regardless of effort", () => {
+			const manager = SettingsManager.inMemory({ axiom: { effort: "balanced", parallelRollouts: 4 } });
+			expect(manager.getAxiomSettings().parallelRollouts).toBe(4);
+		});
+
+		it("honors an override under custom effort", () => {
+			const manager = SettingsManager.inMemory({ axiom: { effort: "custom", parallelRollouts: 3 } });
+			expect(manager.getAxiomSettings().parallelRollouts).toBe(3);
+		});
+	});
+
 	describe("preserves externally added settings", () => {
 		it("should preserve enabledModels when changing thinking level", async () => {
 			// Create initial settings file

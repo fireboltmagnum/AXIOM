@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AssistantMessage } from "@axiom/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ASCoTPlanner } from "../src/axiom/ASCoTPlanner.ts";
 import { BenchmarkProtocol } from "../src/axiom/BenchmarkProtocol.ts";
@@ -10,7 +11,35 @@ import { FlowGraphStore } from "../src/axiom/FlowGraphStore.ts";
 import { ReasoningCritic } from "../src/axiom/ReasoningCritic.ts";
 import type { AxiomAbstraction, AxiomTaskClassification } from "../src/axiom/RuntimeTypes.ts";
 import { SparseTreeGrepStore } from "../src/axiom/SparseTreeGrepStore.ts";
+import { StreamingIPOutputGate } from "../src/axiom/StreamingIPValidator.ts";
 import { renderTaskPrimerBrief, TaskPrimer } from "../src/axiom/TaskPrimer.ts";
+
+function assistantText(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "test",
+		provider: "test",
+		model: "test",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	} as AssistantMessage;
+}
+
+function textOf(message: AssistantMessage): string {
+	return message.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("");
+}
 
 describe("AXIOM core quality improvements", () => {
 	let testDir: string;
@@ -132,6 +161,35 @@ describe("AXIOM core quality improvements", () => {
 		expect(described.descriptions[0]?.description.entities).toEqual(expect.arrayContaining(["Anna", "Gosh"]));
 		expect(described.descriptions[0]?.description.actions).toContain("brawl");
 		expect(reloaded.chunks.some((chunk) => !!chunk.description)).toBe(true);
+	});
+
+	it("StreamingIPOutputGate holds code until the configured chunk threshold passes", async () => {
+		const gate = new StreamingIPOutputGate({ timeoutMs: 500, checkEveryChunks: 2 });
+		const oneChunk = await gate.filter(
+			assistantText(["Before\n", "```js\nconst a = 1;\n```\n", "Between\n"].join("")),
+		);
+
+		expect(oneChunk.checks).toHaveLength(0);
+		expect(textOf(oneChunk.message)).toBe("Before\n");
+
+		const twoChunks = await gate.filter(
+			assistantText(
+				["Before\n", "```js\nconst a = 1;\n```\n", "Between\n", "```js\nconst b = 2;\n```\n", "After"].join(""),
+			),
+		);
+
+		expect(twoChunks.checks).toHaveLength(2);
+		expect(twoChunks.failed).toBeUndefined();
+		expect(textOf(twoChunks.message)).toContain("const b = 2;");
+	});
+
+	it("StreamingIPOutputGate reports exact failures without revealing failed code", async () => {
+		const gate = new StreamingIPOutputGate({ timeoutMs: 500, checkEveryChunks: 1 });
+		const result = await gate.filter(assistantText("Intro\n```js\nconst = ;\n```\nTail"));
+
+		expect(result.failed?.ok).toBe(false);
+		expect(result.failed?.message).toBeTruthy();
+		expect(textOf(result.message)).toBe("Intro\n");
 	});
 
 	it("FlowGraph resolves class method calls and concrete env effects", () => {

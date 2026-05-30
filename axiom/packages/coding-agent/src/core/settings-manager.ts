@@ -247,6 +247,15 @@ export interface AxiomSettings {
 	 */
 	bestOfN?: number;
 	/**
+	 * Parallel rollouts (execution-level test-time scaling). When >1, AXIOM runs
+	 * N INDEPENDENT attempts of the task in isolated git worktrees, verifies each
+	 * with the repair-loop ladder, and promotes the best one's diff into the
+	 * working tree. This is the evidence-backed lever for lifting a small model
+	 * toward large-model agentic scores, at N× model cost. 1 = disabled (default).
+	 * Requires a git repository; falls open to a single in-place run otherwise.
+	 */
+	parallelRollouts?: number;
+	/**
 	 * Auto-retrieval task priming (Aider-style repo-map injection). When
 	 * enabled, AXIOM runs a fast deterministic pre-flight at task start —
 	 * ripgrep over the codebase + 1-hop graph walks for symbols mentioned in
@@ -312,6 +321,7 @@ export interface ResolvedAxiomSettings {
 	rStarExploration: number;
 	conceptMaxRecall: number;
 	bestOfN: number;
+	parallelRollouts: number;
 	autoRetrieval: boolean;
 	autoRollback: boolean;
 }
@@ -365,6 +375,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
 		bestOfN: 1,
+		parallelRollouts: 1,
 		autoRetrieval: false,
 		autoRollback: false,
 	},
@@ -414,6 +425,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 0,
 		bestOfN: 1,
+		parallelRollouts: 1,
 		autoRetrieval: false,
 		autoRollback: false,
 	},
@@ -463,6 +475,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 3,
 		bestOfN: 3,
+		parallelRollouts: 1,
 		autoRetrieval: true,
 		autoRollback: true,
 	},
@@ -512,6 +525,7 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		rStarExploration: 1.4,
 		conceptMaxRecall: 5,
 		bestOfN: 5,
+		parallelRollouts: 1,
 		autoRetrieval: true,
 		autoRollback: true,
 	},
@@ -572,6 +586,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			rStarExploration: settings?.rStarExploration ?? profile.rStarExploration,
 			conceptMaxRecall: settings?.conceptMaxRecall ?? profile.conceptMaxRecall,
 			bestOfN: settings?.bestOfN ?? profile.bestOfN,
+			parallelRollouts: settings?.parallelRollouts ?? profile.parallelRollouts,
 			autoRetrieval: settings?.autoRetrieval ?? profile.autoRetrieval,
 			autoRollback: settings?.autoRollback ?? profile.autoRollback,
 		};
@@ -623,6 +638,7 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		rStarExploration: settings?.rStarExploration ?? 1.4,
 		conceptMaxRecall: settings?.conceptMaxRecall ?? 3,
 		bestOfN: settings?.bestOfN ?? 1,
+		parallelRollouts: settings?.parallelRollouts ?? 1,
 		autoRetrieval: settings?.autoRetrieval ?? true,
 		autoRollback: settings?.autoRollback ?? true,
 	};
@@ -1579,6 +1595,7 @@ export class SettingsManager {
 			rStarExploration: current.rStarExploration,
 			conceptMaxRecall: current.conceptMaxRecall,
 			bestOfN: current.bestOfN,
+			parallelRollouts: current.parallelRollouts,
 			autoRetrieval: current.autoRetrieval,
 			autoRollback: current.autoRollback,
 		};
@@ -1596,6 +1613,30 @@ export class SettingsManager {
 		this.globalSettings.axiom = nextAxiomSettings;
 		this.markModified("axiom", "effort");
 		this.markModified("axiom", feature);
+		this.save();
+		return this.getAxiomSettings();
+	}
+
+	setAxiomStreamingCheckEveryChunks(chunks: number): ResolvedAxiomSettings {
+		const current = this.getAxiomSettings();
+		const nextAxiomSettings: AxiomSettings = {
+			...current,
+			effort: "custom",
+			ipStreamingCheckEveryChunks: Math.max(1, Math.min(10, Math.floor(chunks))),
+		};
+
+		if (this.projectSettings.axiom !== undefined) {
+			const projectSettings = structuredClone(this.projectSettings);
+			projectSettings.axiom = nextAxiomSettings;
+			this.markProjectModified("axiom", "effort");
+			this.markProjectModified("axiom", "ipStreamingCheckEveryChunks");
+			this.saveProjectSettings(projectSettings);
+			return this.getAxiomSettings();
+		}
+
+		this.globalSettings.axiom = nextAxiomSettings;
+		this.markModified("axiom", "effort");
+		this.markModified("axiom", "ipStreamingCheckEveryChunks");
 		this.save();
 		return this.getAxiomSettings();
 	}

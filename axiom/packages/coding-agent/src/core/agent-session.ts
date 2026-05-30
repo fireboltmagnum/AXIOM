@@ -107,19 +107,6 @@ export interface ParsedSkillBlock {
 }
 
 /**
- * Concatenate every text content part of an assistant message into a single
- * string, in order. Used to feed the streaming IP validator the cumulative
- * text it has emitted so far.
- */
-function collectAssistantText(message: AssistantMessage): string {
-	const parts: string[] = [];
-	for (const part of message.content) {
-		if (part.type === "text") parts.push(part.text);
-	}
-	return parts.join("");
-}
-
-/**
  * Parse a skill block from message text.
  * Returns null if the text doesn't contain a skill block.
  */
@@ -1141,6 +1128,12 @@ export class AgentSession {
 
 		this._axiomRuntime.recordStreamCheck(traceId, result);
 		if (result.ok) return;
+		this._handleStreamChunkFailure(result);
+	}
+
+	private _handleStreamChunkFailure(result: import("../axiom/StreamingIPValidator.ts").StreamingChunkCheckResult): void {
+		const traceId = this._activeAxiomTraceId;
+		if (!traceId) return;
 		if (this._axiomStreamAbortPending) return;
 		const axiomSettings = this.settingsManager.getAxiomSettings();
 		if (this._axiomStreamAbortsThisTask >= axiomSettings.ipStreamingMaxAbortsPerTask) return;
@@ -1300,29 +1293,44 @@ export class AgentSession {
 		return textBlocks.map((c) => (c as TextContent).text).join("");
 	}
 
+	private async _prepareAxiomStreamingEvent(event: AgentEvent): Promise<AgentEvent | undefined> {
+		if (event.type === "message_start" && event.message.role === "assistant") {
+			this._startStreamValidator();
+			return event;
+		}
+		if (event.type !== "message_update" && event.type !== "message_end") return event;
+		if (event.message.role !== "assistant") return event;
+
+		const traceId = this._activeAxiomTraceId;
+		const gate = this._axiomStreamOutputGate;
+		if (!gate || !traceId) {
+			if (event.type === "message_end" && this._axiomStreamValidator) {
+				this._axiomStreamValidator.stop();
+				this._axiomStreamValidator = undefined;
+			}
+			return event;
+		}
+
+		const force = event.type === "message_end";
+		const filtered = await gate.filter(event.message as AssistantMessage, force);
+		for (const check of filtered.checks) {
+			this._axiomRuntime.recordStreamCheck(traceId, check);
+		}
+		if (filtered.failed) {
+			this._handleStreamChunkFailure(filtered.failed);
+		}
+		if (event.type === "message_end") {
+			this._axiomStreamOutputGate = undefined;
+			this._axiomStreamValidator?.stop();
+			this._axiomStreamValidator = undefined;
+		}
+		return { ...event, message: filtered.message } as AgentEvent;
+	}
+
 	private _recordAxiomEvent(event: AgentEvent): void {
 		const traceId = this._activeAxiomTraceId;
 		if (!traceId) {
 			return;
-		}
-
-		// Streaming IP: spin up a fresh chunk validator for each assistant message
-		// the model starts emitting. Disabled when ipStreaming is off, when no abort
-		// budget remains, or when one is already mid-flight for this message.
-		if (event.type === "message_start" && event.message.role === "assistant") {
-			this._startStreamValidator();
-		}
-		if (event.type === "message_update" && event.message.role === "assistant" && this._axiomStreamValidator) {
-			const fullText = collectAssistantText(event.message as AssistantMessage);
-			if (fullText) {
-				this._axiomStreamValidator.observe(fullText);
-			}
-		}
-		if (event.type === "message_end" && event.message.role === "assistant" && this._axiomStreamValidator) {
-			// Stop accepting new check results once the message is done. Pending
-			// in-flight checks drain in the background and their results are dropped.
-			this._axiomStreamValidator.stop();
-			this._axiomStreamValidator = undefined;
 		}
 
 		if (event.type === "message_end" && event.message.role === "assistant" && this._activeAxiomClassification) {
@@ -1840,6 +1848,9 @@ export class AgentSession {
 		this._axiomToolsUsedThisTask = [];
 		this._axiomStreamAbortsThisTask = 0;
 		this._axiomStreamAbortPending = false;
+		this._axiomStreamOutputGate = undefined;
+		this._axiomStreamValidator?.stop();
+		this._axiomStreamValidator = undefined;
 		this._repairLoopAttempts = 0;
 		this._repairLoopLastSignature = undefined;
 		this._repairLoopRepeatCount = 0;
@@ -1958,6 +1969,7 @@ export class AgentSession {
 			this._axiomToolsUsedThisTask = [];
 			this._axiomStreamAbortsThisTask = 0;
 			this._axiomStreamAbortPending = false;
+			this._axiomStreamOutputGate = undefined;
 			this._axiomStreamValidator?.stop();
 			this._axiomStreamValidator = undefined;
 			this._repairLoopAttempts = 0;
