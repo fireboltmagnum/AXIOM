@@ -212,17 +212,41 @@
     opacity: 0; transition: opacity .35s; pointer-events: none;
   }
   .card:hover::after { opacity: 1; }
-  .card .emoji { font-size: 24px; margin-bottom: 14px; display: block; }
-  .card h3 { font-size: 17px; margin-bottom: 8px; letter-spacing: -0.01em; }
+  .card h3 { font-size: 17px; margin-bottom: 10px; letter-spacing: -0.01em; color: var(--text); }
+  .card h3::before { content: ""; display: block; width: 22px; height: 2px; background: var(--coral); margin-bottom: 14px; opacity: .7; }
   .card p { font-size: 14.5px; color: var(--muted); }
 
   /* ---------- Closing ---------- */
   .close { text-align: center; }
   .close h2 { font-size: clamp(28px, 5vw, 50px); letter-spacing: -0.02em; font-weight: 800; margin-bottom: 28px; }
   .close .accent { color: var(--coral); }
-  footer { text-align: center; color: var(--muted-dim); font-size: 13px; padding: 40px 0 64px; border-top: 1px solid var(--line); margin-top: 40px; }
-  footer a { color: var(--muted); }
+  footer { text-align: center; color: var(--muted-dim); font-size: 13px; padding: 44px 0 72px; border-top: 1px solid var(--line); margin-top: 40px; }
+  footer a { color: var(--muted); text-decoration: none; transition: color .2s; }
+  footer a:hover { color: var(--coral-soft); }
   footer .ver { color: var(--coral); }
+  .made { font-size: 15px; color: var(--text); margin-bottom: 14px; }
+  .made a { color: var(--coral-soft); font-weight: 600; }
+  .foot-links { font-size: 13px; }
+
+  /* ---------- Personal note ---------- */
+  .note { padding-top: clamp(40px, 7vh, 72px); }
+  .note-card {
+    position: relative; max-width: 640px; margin: 0 auto; padding: 40px clamp(24px, 5vw, 48px);
+    transform: rotate(-0.5deg);
+  }
+  .note-card::before {
+    content: "\201C"; position: absolute; top: -18px; left: -6px;
+    font-family: Georgia, serif; font-size: 90px; line-height: 1;
+    color: rgba(255,107,92,0.18);
+  }
+  .note-kicker { font-size: 12.5px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--coral-soft); margin-bottom: 16px; }
+  .note-body { font-size: clamp(17px, 2.3vw, 21px); line-height: 1.65; color: var(--text); font-weight: 350; }
+  .note-body em { font-style: normal; color: var(--coral-soft); font-weight: 600; }
+  .sig { display: inline-flex; flex-direction: column; margin-top: 26px; text-decoration: none; }
+  .sig-name { font-size: 19px; font-weight: 700; color: var(--text); font-family: "Snell Roundhand", "Brush Script MT", cursive; letter-spacing: 0.5px; }
+  .sig-name { font-family: ui-rounded, "Segoe Script", cursive; }
+  .sig-meta { font-size: 12.5px; color: var(--muted-dim); margin-top: 4px; transition: color .2s; }
+  .sig:hover .sig-meta { color: var(--coral-soft); }
 </style>
 </head>
 <body>
@@ -245,7 +269,7 @@
         <span class="reveal accent">free.</span>
       </h1>
       <p class="tagline">
-        A real coding agent — it reads, writes, edits, and runs your code.
+        A real coding agent that reads, writes, edits, and runs your code.
         Built to be excellent on <b>free</b> model tiers. Bring your own keys, or sign in with Google.
       </p>
 
@@ -278,12 +302,30 @@
         <p>Real tools, real files, real terminal — on models that cost you nothing.</p>
       </div>
       <div class="grid" id="features">
-        <div class="card"><span class="emoji">🛠️</span><h3>Reads, writes, runs</h3><p>Full file + shell tools. It edits your repo and runs commands, not just suggests them.</p></div>
-        <div class="card"><span class="emoji">🆓</span><h3>Tuned for free tiers</h3><p>The whole point: be genuinely good on the free models people can actually access.</p></div>
-        <div class="card"><span class="emoji">🔑</span><h3>Bring your own keys</h3><p>Plug in any free provider key, or sign in with Google / Codex OAuth. No subscription.</p></div>
-        <div class="card"><span class="emoji">🎨</span><h3>Space canvas</h3><p>A dedicated visual agent that diagrams architecture and flows, then hands the design to Chat.</p></div>
-        <div class="card"><span class="emoji">🧠</span><h3>AXIOM runtime</h3><p>CodeAct execution, agent memory, deep research, and test-time scaling baked in.</p></div>
-        <div class="card"><span class="emoji">💻</span><h3>Runs everywhere</h3><p>Native desktop app for macOS, Windows, and Linux. One download, your platform.</p></div>
+        <div class="card"><h3>Reads, writes, runs</h3><p>Full file and shell tools. It opens your repo, edits across files, and runs the commands. It doesn't just paste a snippet and wish you luck.</p></div>
+        <div class="card"><h3>Built for the free tier</h3><p>Most agents assume you're paying for a frontier model. AXIOM's whole reason to exist is being genuinely useful on the models you can get for nothing.</p></div>
+        <div class="card"><h3>Your keys, your accounts</h3><p>Drop in any free provider key, or sign in with Google or Codex OAuth. No AXIOM subscription, no metered middleman.</p></div>
+        <div class="card"><h3>Space, a thinking canvas</h3><p>A second agent that sketches architecture and flows on a real canvas, then hands the design straight to the coding agent.</p></div>
+        <div class="card"><h3>The AXIOM runtime</h3><p>CodeAct execution, agent memory, deep research and test-time scaling. The parts that make a small model punch above its weight.</p></div>
+        <div class="card"><h3>One download per OS</h3><p>Native desktop app for macOS, Windows and Linux. The page already knows which one you need.</p></div>
+      </div>
+    </section>
+
+    <!-- PERSONAL NOTE -->
+    <section class="note">
+      <div class="note-card">
+        <p class="note-kicker">why i built this</p>
+        <p class="note-body">
+          I'm a student. For a long time the best coding help was locked behind a
+          paycheck I didn't have, and that never sat right with me. So AXIOM is my
+          attempt at the opposite: a real agent, not a toy, that's <em>actually good</em>
+          on the models anyone can use for free. If it helps one person who'd
+          otherwise be priced out, it was worth every late night.
+        </p>
+        <a class="sig" href="https://github.com/fireboltmagnum/fireboltmagnum">
+          <span class="sig-name">Aditya Nair</span>
+          <span class="sig-meta">student developer · India · @fireboltmagnum ↗</span>
+        </a>
       </div>
     </section>
 
@@ -299,9 +341,16 @@
   </main>
 
   <footer>
-    <span id="ver"></span>
-    <a href="https://github.com/fireboltmagnum/AXIOM">Source on GitHub</a> ·
-    <a href="https://github.com/fireboltmagnum/AXIOM/releases">All releases</a>
+    <div class="made">
+      Made by <a href="https://github.com/fireboltmagnum/fireboltmagnum">Aditya Nair</a>,
+      so coding help can be free.
+    </div>
+    <div class="foot-links">
+      <span id="ver"></span>
+      <a href="https://github.com/fireboltmagnum/AXIOM">Source</a> ·
+      <a href="https://github.com/fireboltmagnum/AXIOM/releases">Releases</a> ·
+      <a href="https://github.com/fireboltmagnum/fireboltmagnum">@fireboltmagnum</a>
+    </div>
   </footer>
 
 <script>
