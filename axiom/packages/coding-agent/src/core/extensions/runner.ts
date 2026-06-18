@@ -190,9 +190,13 @@ export async function emitSessionShutdownEvent(
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async () => undefined,
+	multiSelect: async () => undefined,
 	confirm: async () => false,
 	input: async () => undefined,
 	notify: () => {},
+	hostCall: async () => {
+		throw new Error("host_call is not available without an embedding host (RPC mode only)");
+	},
 	onTerminalInput: () => () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},

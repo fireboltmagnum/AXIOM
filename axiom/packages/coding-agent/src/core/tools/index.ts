@@ -1,4 +1,10 @@
 export {
+	type AskUserQuestionToolDetails,
+	type AskUserQuestionToolInput,
+	createAskUserQuestionTool,
+	createAskUserQuestionToolDefinition,
+} from "./ask-user-question.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -9,6 +15,12 @@ export {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "./bash.ts";
+export {
+	type BenchmarkTestToolDetails,
+	type BenchmarkTestToolInput,
+	createBenchmarkTestTool,
+	createBenchmarkTestToolDefinition,
+} from "./benchmark-test.ts";
 export {
 	type CodeGraphToolDetails,
 	type CodeGraphToolInput,
@@ -23,6 +35,12 @@ export {
 	type EditToolInput,
 	type EditToolOptions,
 } from "./edit.ts";
+export {
+	createExecuteCodeTool,
+	createExecuteCodeToolDefinition,
+	type ExecuteCodeToolDetails,
+	type ExecuteCodeToolInput,
+} from "./execute-code.ts";
 export { withFileMutationQueue } from "./file-mutation-queue.ts";
 export {
 	createFindTool,
@@ -38,6 +56,12 @@ export {
 	type FlowGraphToolDetails,
 	type FlowGraphToolInput,
 } from "./flow-graph.ts";
+export {
+	createGatherContextTool,
+	createGatherContextToolDefinition,
+	type GatherContextToolDetails,
+	type GatherContextToolInput,
+} from "./gather-context.ts";
 export {
 	createGrepTool,
 	createGrepToolDefinition,
@@ -62,6 +86,12 @@ export {
 	type LsToolInput,
 	type LsToolOptions,
 } from "./ls.ts";
+export {
+	createMemoryTool,
+	createMemoryToolDefinition,
+	type MemoryToolDetails,
+	type MemoryToolInput,
+} from "./memory.ts";
 export {
 	createPlaywrightCliTool,
 	createPlaywrightCliToolDefinition,
@@ -106,6 +136,13 @@ export {
 	type UnderstandCodeToolInput,
 } from "./understand-code.ts";
 export {
+	createWebResearchTool,
+	createWebResearchToolDefinition,
+	type WebResearchToolDetails,
+	type WebResearchToolInput,
+	type WebResearchToolOptions,
+} from "./web-research.ts";
+export {
 	createWriteTool,
 	createWriteToolDefinition,
 	type WriteOperations,
@@ -115,11 +152,15 @@ export {
 
 import type { AgentTool } from "@axiom/agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { createAskUserQuestionTool, createAskUserQuestionToolDefinition } from "./ask-user-question.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
+import { createBenchmarkTestTool, createBenchmarkTestToolDefinition } from "./benchmark-test.ts";
 import { createCodeGraphTool, createCodeGraphToolDefinition } from "./code-graph.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
+import { createExecuteCodeTool, createExecuteCodeToolDefinition } from "./execute-code.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createFlowGraphTool, createFlowGraphToolDefinition } from "./flow-graph.ts";
+import { createGatherContextTool, createGatherContextToolDefinition } from "./gather-context.ts";
 import {
 	createGrepTool,
 	createGrepToolDefinition,
@@ -129,16 +170,19 @@ import {
 } from "./grep.ts";
 import { createKnowledgeGraphTool, createKnowledgeGraphToolDefinition } from "./knowledge-graph.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
+import { createMemoryTool, createMemoryToolDefinition } from "./memory.ts";
 import { createPlaywrightCliTool, createPlaywrightCliToolDefinition } from "./playwright-cli.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { createSparseTreeGrepTool, createSparseTreeGrepToolDefinition } from "./sparse-tree-grep.ts";
 import { createTodoListTool, createTodoListToolDefinition } from "./todo-list.ts";
 import { createUnderstandCodeTool, createUnderstandCodeToolDefinition } from "./understand-code.ts";
+import { createWebResearchTool, createWebResearchToolDefinition } from "./web-research.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 export type ToolName =
+	| "ask_user_question"
 	| "read"
 	| "bash"
 	| "edit"
@@ -153,8 +197,14 @@ export type ToolName =
 	| "knowledge_graph"
 	| "sparse_tree_grep"
 	| "playwright_cli"
-	| "todo_list";
+	| "todo_list"
+	| "gather_context"
+	| "benchmark_test"
+	| "execute_code"
+	| "memory"
+	| "web_research";
 export const allToolNames: Set<ToolName> = new Set([
+	"ask_user_question",
 	"read",
 	"bash",
 	"edit",
@@ -170,6 +220,11 @@ export const allToolNames: Set<ToolName> = new Set([
 	"sparse_tree_grep",
 	"playwright_cli",
 	"todo_list",
+	"gather_context",
+	"benchmark_test",
+	"execute_code",
+	"memory",
+	"web_research",
 ]);
 
 export interface ToolsOptions {
@@ -184,6 +239,8 @@ export interface ToolsOptions {
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
 	switch (toolName) {
+		case "ask_user_question":
+			return createAskUserQuestionToolDefinition();
 		case "read":
 			return createReadToolDefinition(cwd, options?.read);
 		case "bash":
@@ -214,6 +271,16 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createPlaywrightCliToolDefinition(cwd);
 		case "todo_list":
 			return createTodoListToolDefinition();
+		case "gather_context":
+			return createGatherContextToolDefinition(cwd);
+		case "benchmark_test":
+			return createBenchmarkTestToolDefinition();
+		case "execute_code":
+			return createExecuteCodeToolDefinition(cwd);
+		case "memory":
+			return createMemoryToolDefinition(cwd);
+		case "web_research":
+			return createWebResearchToolDefinition({ cwd });
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -221,6 +288,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
 	switch (toolName) {
+		case "ask_user_question":
+			return createAskUserQuestionTool();
 		case "read":
 			return createReadTool(cwd, options?.read);
 		case "bash":
@@ -251,6 +320,16 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createPlaywrightCliTool(cwd);
 		case "todo_list":
 			return createTodoListTool();
+		case "gather_context":
+			return createGatherContextTool(cwd);
+		case "benchmark_test":
+			return createBenchmarkTestTool();
+		case "execute_code":
+			return createExecuteCodeTool(cwd);
+		case "memory":
+			return createMemoryTool(cwd);
+		case "web_research":
+			return createWebResearchTool({ cwd });
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -276,6 +355,7 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
+		ask_user_question: createAskUserQuestionToolDefinition(),
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
 		edit: createEditToolDefinition(cwd, options?.edit),
@@ -291,6 +371,11 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		sparse_tree_grep: createSparseTreeGrepToolDefinition(cwd),
 		playwright_cli: createPlaywrightCliToolDefinition(cwd),
 		todo_list: createTodoListToolDefinition(),
+		gather_context: createGatherContextToolDefinition(cwd),
+		benchmark_test: createBenchmarkTestToolDefinition(),
+		execute_code: createExecuteCodeToolDefinition(cwd),
+		memory: createMemoryToolDefinition(cwd),
+		web_research: createWebResearchToolDefinition({ cwd }),
 	};
 }
 
@@ -314,6 +399,7 @@ export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[]
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
 	return {
+		ask_user_question: createAskUserQuestionTool(),
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
 		edit: createEditTool(cwd, options?.edit),
@@ -329,5 +415,10 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		sparse_tree_grep: createSparseTreeGrepTool(cwd),
 		playwright_cli: createPlaywrightCliTool(cwd),
 		todo_list: createTodoListTool(),
+		gather_context: createGatherContextTool(cwd),
+		benchmark_test: createBenchmarkTestTool(),
+		execute_code: createExecuteCodeTool(cwd),
+		memory: createMemoryTool(cwd),
+		web_research: createWebResearchTool({ cwd }),
 	};
 }

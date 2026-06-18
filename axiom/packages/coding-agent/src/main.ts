@@ -576,6 +576,14 @@ export async function main(args: string[], options?: MainOptions) {
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 
+		// When launched by the desktop Space surface, give the real agent the
+		// canvas tools so it can draw on the whiteboard alongside its full
+		// toolset. Gated by env so other launches are unaffected.
+		if (isTruthyEnvFlag(process.env.AXIOM_SPACE_TOOLS)) {
+			const { createSpaceTools } = await import("./core/tools/space-tools.ts");
+			sessionOptions.customTools = [...(sessionOptions.customTools ?? []), ...createSpaceTools()];
+		}
+
 		if (parsed.apiKey) {
 			if (!sessionOptions.model) {
 				diagnostics.push({

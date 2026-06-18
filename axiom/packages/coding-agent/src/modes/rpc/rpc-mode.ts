@@ -13,6 +13,7 @@
 
 import * as crypto from "node:crypto";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import { normalizeGoalInput } from "../../core/background-goal.ts";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -20,6 +21,10 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.ts";
+import type { SessionMessageEntry } from "../../core/session-manager.ts";
+import { SessionManager } from "../../core/session-manager.ts";
+import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { createSyntheticSourceInfo } from "../../core/source-info.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -132,6 +137,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
 			),
 
+		multiSelect: (title, options, opts) =>
+			createDialogPromise(opts, undefined, { method: "multiSelect", title, options, timeout: opts?.timeout }, (r) =>
+				"cancelled" in r && r.cancelled ? undefined : "values" in r ? r.values : undefined,
+			),
+
 		confirm: (title, message, opts) =>
 			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
 				"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
@@ -151,6 +161,61 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				message,
 				notifyType: type,
 			} as RpcExtensionUIRequest);
+		},
+
+		hostCall<T = unknown>(
+			channel: string,
+			op: string,
+			payload?: unknown,
+			opts?: ExtensionUIDialogOptions,
+		): Promise<T> {
+			// Round-trips to the embedding host (desktop app) and awaits its JSON
+			// result. Rejects on host-reported error so the tool surfaces failures
+			// to the agent. Resolves undefined on cancel/abort/timeout.
+			const id = crypto.randomUUID();
+			return new Promise<T>((resolve, reject) => {
+				let timeoutId: ReturnType<typeof setTimeout> | undefined;
+				const cleanup = () => {
+					if (timeoutId) clearTimeout(timeoutId);
+					opts?.signal?.removeEventListener("abort", onAbort);
+					pendingExtensionRequests.delete(id);
+				};
+				const onAbort = () => {
+					cleanup();
+					resolve(undefined as T);
+				};
+				if (opts?.signal?.aborted) {
+					resolve(undefined as T);
+					return;
+				}
+				opts?.signal?.addEventListener("abort", onAbort, { once: true });
+				if (opts?.timeout) {
+					timeoutId = setTimeout(() => {
+						cleanup();
+						reject(new Error(`host_call ${channel}.${op} timed out after ${opts.timeout}ms`));
+					}, opts.timeout);
+				}
+				pendingExtensionRequests.set(id, {
+					resolve: (response: RpcExtensionUIResponse) => {
+						cleanup();
+						if ("error" in response && response.error) {
+							reject(new Error(response.error));
+							return;
+						}
+						resolve("result" in response ? (response.result as T) : (undefined as T));
+					},
+					reject,
+				});
+				output({
+					type: "extension_ui_request",
+					id,
+					method: "host_call",
+					channel,
+					op,
+					payload,
+					timeout: opts?.timeout,
+				} as RpcExtensionUIRequest);
+			});
 		},
 
 		onTerminalInput(): () => void {
@@ -400,6 +465,150 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return undefined;
 			}
 
+			case "run_slash_command": {
+				const text = command.command.trim();
+				if (!text.startsWith("/")) return error(id, "run_slash_command", "Slash command must start with /.");
+				const [rawName = "", ...rest] = text.slice(1).split(/\s+/);
+				const name = rawName.toLowerCase();
+				const arg = rest.join(" ").trim();
+				switch (name) {
+					case "goal": {
+						const normalized = normalizeGoalInput(arg);
+						session.setBackgroundGoal(normalized);
+						return success(id, "run_slash_command", {
+							message: normalized ? `Pursuing goal: ${normalized}` : "Background goal cleared.",
+						});
+					}
+					case "compact": {
+						await session.compact(arg || undefined);
+						return success(id, "run_slash_command", {
+							message: "Context compacted.",
+						});
+					}
+					case "export": {
+						const outputPath = await session.exportToHtml(arg || undefined);
+						return success(id, "run_slash_command", {
+							message: `Exported session: ${outputPath}`,
+						});
+					}
+					case "copy": {
+						const copyText = session.getLastAssistantText();
+						return success(id, "run_slash_command", {
+							message: copyText ? "Copied the last AXIOM response." : "No assistant response to copy yet.",
+							copyText,
+						});
+					}
+					case "new": {
+						await runtimeHost.newSession();
+						await rebindSession();
+						return success(id, "run_slash_command", { message: "Started a new session." });
+					}
+					case "clone": {
+						const leafId = session.sessionManager.getLeafId();
+						if (!leafId)
+							return error(id, "run_slash_command", "Cannot clone session: no current entry selected.");
+						const result = await runtimeHost.fork(leafId, { position: "at" });
+						if (!result.cancelled) await rebindSession();
+						return success(id, "run_slash_command", {
+							message: result.cancelled ? "Clone cancelled." : "Cloned the current session.",
+						});
+					}
+					case "reload": {
+						await session.reload();
+						return success(id, "run_slash_command", {
+							message: "Reloaded settings, extensions, skills, prompts, and themes.",
+						});
+					}
+					case "name": {
+						if (!arg) return error(id, "run_slash_command", "Usage: /name <session name>");
+						session.setSessionName(arg);
+						return success(id, "run_slash_command", { message: `Session renamed: ${arg}` });
+					}
+					case "session": {
+						return success(id, "run_slash_command", {
+							message: [
+								`Session: ${session.sessionName ?? session.sessionId}`,
+								`Messages: ${session.messages.length}`,
+								`CWD: ${session.sessionManager.getCwd()}`,
+								`Reasoning: ${session.thinkingLevel}`,
+							].join("\n"),
+						});
+					}
+					case "sessions":
+					case "list_sessions": {
+						const sessions = await SessionManager.listAll();
+						const lines = sessions.slice(0, 12).map((item, index) => {
+							const title = item.name || item.firstMessage || "Untitled session";
+							const cwd = item.cwd ? ` — ${item.cwd}` : "";
+							return `${index + 1}. ${title}${cwd}`;
+						});
+						return success(id, "run_slash_command", {
+							message: lines.length > 0 ? `Recent sessions:\n${lines.join("\n")}` : "No saved sessions found.",
+						});
+					}
+					case "reasoning": {
+						const level = arg as typeof session.thinkingLevel;
+						const allowed = ["off", "minimal", "low", "medium", "high", "xhigh"];
+						if (!allowed.includes(level)) {
+							return success(id, "run_slash_command", {
+								message: `Reasoning: ${session.thinkingLevel}\nUsage: /reasoning off|minimal|low|medium|high|xhigh`,
+							});
+						}
+						session.setThinkingLevel(level);
+						return success(id, "run_slash_command", { message: `Reasoning set to ${session.thinkingLevel}.` });
+					}
+					case "hotkeys":
+						return success(id, "run_slash_command", {
+							message: [
+								"Desktop hotkeys:",
+								"Enter sends. Shift+Enter inserts a new line.",
+								"/ opens commands and skills while the caret is in the command token.",
+								"Use the Goal and reasoning chips in the composer for persistent controls.",
+							].join("\n"),
+						});
+					case "help":
+						return success(id, "run_slash_command", {
+							message: [
+								"AXIOM desktop commands:",
+								"/goal <text> sets the active working goal. /goal clear removes it.",
+								"/reasoning off|minimal|low|medium|high|xhigh changes reasoning effort.",
+								"/compact compacts this session context.",
+								"/session shows the current session, message count, cwd, and reasoning level.",
+								"/new starts a new session. /name <title> renames it.",
+								"/copy copies the last AXIOM response. /export writes an HTML transcript.",
+								"Skills appear as /skill:<name> in the same menu.",
+							].join("\n"),
+						});
+					case "changelog":
+						return success(id, "run_slash_command", {
+							message:
+								"Changelog is available from the project docs and release notes. Desktop inline changelog UI is not configured in this build.",
+						});
+					case "model":
+					case "settings":
+						return success(id, "run_slash_command", {
+							message: `/${name} is controlled by the desktop UI here. Use the composer chip/menu instead.`,
+						});
+					case "import":
+					case "share":
+					case "fork":
+					case "tree":
+					case "login":
+					case "logout":
+					case "resume":
+					case "scoped-models":
+					case "steer":
+					case "quit":
+						return success(id, "run_slash_command", {
+							message: `/${name} needs an interactive desktop picker or account flow. Use the matching Dashboard, session, model, or window control for now.`,
+						});
+					default:
+						return success(id, "run_slash_command", {
+							message: `/${name} was recognized, but this desktop build has no direct action for it yet.`,
+						});
+				}
+			}
+
 			case "steer": {
 				await session.steer(command.message, command.images);
 				return success(id, "steer");
@@ -432,6 +641,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				const state: RpcSessionState = {
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
+					backgroundGoal: session.getBackgroundGoal(),
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
 					steeringMode: session.steeringMode,
@@ -444,6 +654,24 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					pendingMessageCount: session.pendingMessageCount,
 				};
 				return success(id, "get_state", state);
+			}
+
+			case "get_active_tools": {
+				return success(id, "get_active_tools", { toolNames: session.getActiveToolNames() });
+			}
+
+			case "get_all_tools": {
+				return success(id, "get_all_tools", { toolNames: session.getAllTools().map((tool) => tool.name) });
+			}
+
+			case "set_active_tools": {
+				session.setActiveToolsByName(command.toolNames);
+				return success(id, "set_active_tools", { toolNames: session.getActiveToolNames() });
+			}
+
+			case "set_tool_permission_mode": {
+				session.setToolPermissionMode(command.mode);
+				return success(id, "set_tool_permission_mode", { mode: session.getToolPermissionMode() });
 			}
 
 			// =================================================================
@@ -607,6 +835,40 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "set_session_name");
 			}
 
+			case "list_sessions": {
+				const sessions = command.all
+					? await SessionManager.listAll()
+					: await SessionManager.list(session.sessionManager.getCwd(), session.sessionManager.getSessionDir());
+				return success(id, "list_sessions", {
+					sessions: sessions.map((item) => ({
+						...item,
+						created: item.created.toISOString(),
+						modified: item.modified.toISOString(),
+					})),
+				});
+			}
+
+			case "get_history": {
+				// Read the live session off runtimeHost rather than the closure's
+				// `session` binding, so a resume that just rebound the session is
+				// always reflected here regardless of rebind timing.
+				const messages = runtimeHost.session.sessionManager
+					.getBranch()
+					.filter(
+						(entry): entry is SessionMessageEntry =>
+							entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"),
+					)
+					.map((entry) => {
+						const message = entry.message as { role: "user" | "assistant"; content: unknown };
+						return {
+							role: message.role,
+							content: message.content,
+							time: entry.timestamp,
+						};
+					});
+				return success(id, "get_history", { messages });
+			}
+
 			// =================================================================
 			// Messages
 			// =================================================================
@@ -621,6 +883,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			case "get_commands": {
 				const commands: RpcSlashCommand[] = [];
+				const builtinSourceInfo = createSyntheticSourceInfo("<builtin:slash-commands>", { source: "builtin" });
+
+				for (const command of BUILTIN_SLASH_COMMANDS) {
+					commands.push({
+						name: command.name,
+						description: command.description,
+						source: "builtin",
+						sourceInfo: builtinSourceInfo,
+					});
+				}
 
 				for (const command of session.extensionRunner.getRegisteredCommands()) {
 					commands.push({

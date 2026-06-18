@@ -80,6 +80,41 @@ function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
+function messageText(message: Message | AgentMessage): string {
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (part && typeof part === "object" && "text" in part) {
+				const text = (part as { text?: unknown }).text;
+				return typeof text === "string" ? text : "";
+			}
+			if (part && typeof part === "object" && "content" in part) {
+				const nested = (part as { content?: unknown }).content;
+				if (typeof nested === "string") return nested;
+			}
+			return "";
+		})
+		.join("");
+}
+
+function dumpMessages(messages: readonly (Message | AgentMessage)[]): string {
+	return messages.map((message, index) => `${index}:${message.role}:${messageText(message)}`).join("\n");
+}
+
+function assistantText(messages: readonly AgentMessage[]): string {
+	const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant") as
+		| AssistantMessage
+		| undefined;
+	return (
+		lastAssistant?.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join("") ?? ""
+	);
+}
+
 describe("agentLoop with AgentMessage", () => {
 	it("should emit events with AgentMessage types", async () => {
 		const context: AgentContext = {
@@ -181,6 +216,200 @@ describe("agentLoop with AgentMessage", () => {
 		// The notification should have been filtered out in convertToLlm
 		expect(convertedMessages.length).toBe(1); // Only user message
 		expect(convertedMessages[0].role).toBe("user");
+	});
+
+	it("should discard a no-tool draft and run one tool-disabled final answer pass", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [
+				{
+					name: "read",
+					label: "Read",
+					description: "read",
+					parameters: Type.Object({ path: Type.String() }),
+					execute: async () => ({ content: [{ type: "text", text: "" }], details: {} }),
+				} satisfies AgentTool,
+			],
+		};
+		const userPrompt: AgentMessage = createUserMessage("Use the source material.");
+		const providerContexts: Message[][] = [];
+		const providerToolCounts: number[] = [];
+		let callCount = 0;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			prepareFinalAnswer: () => [createUserMessage("FULL GATHERED CONTENT")],
+		};
+
+		const streamFn = (_model: Model<any>, providerContext: any) => {
+			providerContexts.push(providerContext.messages);
+			providerToolCounts.push(providerContext.tools?.length ?? 0);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				callCount++;
+				const text = callCount === 1 ? "thin draft" : "complete answer from gathered content";
+				const message = createAssistantMessage([{ type: "text", text }]);
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(callCount).toBe(2);
+		expect(providerToolCounts).toEqual([1, 0]);
+		expect(
+			providerContexts[1].some((message) => message.role === "user" && message.content === "FULL GATHERED CONTENT"),
+		).toBe(true);
+		expect(events.some((event) => event.type === "message_discard" && event.reason === "final_gather")).toBe(true);
+		expect(messages.map((message) => message.role)).toEqual(["user", "user", "assistant"]);
+		expect((messages[2] as AssistantMessage).content).toEqual([
+			{ type: "text", text: "complete answer from gathered content" },
+		]);
+	});
+
+	it("should discard a truncated no-tool draft and prepare a gathered final answer", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const userPrompt: AgentMessage = createUserMessage("Use the source material.");
+		let callCount = 0;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			prepareFinalAnswer: () => [createUserMessage("FULL GATHERED CONTENT AFTER LENGTH")],
+		};
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				callCount++;
+				const reason = callCount === 1 ? "length" : "stop";
+				const message =
+					reason === "length"
+						? createAssistantMessage([{ type: "text", text: "truncated draft" }], reason)
+						: createAssistantMessage([{ type: "text", text: "complete answer after gathered content" }], reason);
+				stream.push({ type: "done", reason, message });
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(callCount).toBe(2);
+		expect(events.some((event) => event.type === "message_discard" && event.reason === "final_gather")).toBe(true);
+		expect(assistantText(messages)).toBe("complete answer after gathered content");
+		expect(dumpMessages(messages)).not.toContain("truncated draft");
+	});
+
+	it("should show before/after final-call context for enforced gather with a stub provider", async () => {
+		async function runFixture(enforcedGather: boolean) {
+			const providerContexts: Message[][] = [];
+			const providerToolCounts: number[] = [];
+			const gatheredBlock = [
+				"=== AXIOM ENFORCED FINAL SYNTHESIS ===",
+				"FULL SOURCE: On page 53, Anna blocks Gosh's strike, twists the knife away, and the fight ends when Sam enters.",
+			].join("\n");
+			const context: AgentContext = {
+				systemPrompt: "You are helpful.",
+				messages: [
+					createUserMessage(
+						"SparseTreeGrep summary: fight scene candidate. Snippet: Anna and Gosh clash near the stairs.",
+					),
+				],
+				tools: [
+					{
+						name: "read",
+						label: "Read",
+						description: "read",
+						parameters: Type.Object({ path: Type.String() }),
+						execute: async () => ({ content: [{ type: "text", text: "" }], details: {} }),
+					} satisfies AgentTool,
+				],
+			};
+			let callCount = 0;
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				transformContext: async (messages) =>
+					messages.filter((message, index) => {
+						const text = messageText(message);
+						return (
+							index === messages.length - 1 ||
+							text.includes("SparseTreeGrep summary") ||
+							text.includes("AXIOM ENFORCED FINAL SYNTHESIS")
+						);
+					}),
+				prepareFinalAnswer: enforcedGather ? () => [createUserMessage(gatheredBlock)] : undefined,
+			};
+
+			const streamFn = (_model: Model<any>, providerContext: any) => {
+				providerContexts.push(providerContext.messages);
+				providerToolCounts.push(providerContext.tools?.length ?? 0);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					callCount++;
+					const text =
+						callCount === 1
+							? "summary-level answer from SparseTreeGrep description"
+							: "complete answer from full source: Anna disarms Gosh before Sam enters.";
+					const message = createAssistantMessage([{ type: "text", text }]);
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			};
+
+			const stream = agentLoop(
+				[createUserMessage("Write the exact fight outcome.")],
+				context,
+				config,
+				undefined,
+				streamFn,
+			);
+			for await (const _event of stream) {
+				// drain
+			}
+			const messages = await stream.result();
+			return {
+				callCount,
+				output: assistantText(messages),
+				providerToolCounts,
+				firstContextDump: dumpMessages(providerContexts[0] ?? []),
+				finalContextDump: dumpMessages(providerContexts[providerContexts.length - 1] ?? []),
+			};
+		}
+
+		const before = await runFixture(false);
+		const after = await runFixture(true);
+
+		expect(before.callCount).toBe(1);
+		expect(before.providerToolCounts).toEqual([1]);
+		expect(before.finalContextDump).toContain("SparseTreeGrep summary");
+		expect(before.finalContextDump).not.toContain("FULL SOURCE");
+		expect(before.output).toBe("summary-level answer from SparseTreeGrep description");
+
+		expect(after.callCount).toBe(2);
+		expect(after.providerToolCounts).toEqual([1, 0]);
+		expect(after.firstContextDump).toContain("SparseTreeGrep summary");
+		expect(after.firstContextDump).not.toContain("FULL SOURCE");
+		expect(after.finalContextDump).toContain("AXIOM ENFORCED FINAL SYNTHESIS");
+		expect(after.finalContextDump).toContain("FULL SOURCE");
+		expect(after.output).toBe("complete answer from full source: Anna disarms Gosh before Sam enters.");
 	});
 
 	it("should apply transformContext before convertToLlm", async () => {

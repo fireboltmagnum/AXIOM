@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AXIOM — free, genuinely-good agentic coding</title>
+<meta name="description" content="AXIOM is a free agentic coding assistant. Download for macOS, Windows, or Linux." />
+<link rel="icon" href="favicon.png" />
+<style>
+  :root {
+    --bg: #0e0d0c;
+    --panel: #181615;
+    --line: #2a2725;
+    --text: #f2ede9;
+    --muted: #9b948e;
+    --coral: #ff6b5c;
+    --coral-dim: #c4554a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 24px;
+  }
+  .wrap { width: 100%; max-width: 720px; padding: 96px 0 64px; text-align: center; }
+  .logo {
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    font-size: 14px;
+    color: var(--coral);
+    margin-bottom: 40px;
+  }
+  h1 {
+    font-size: 52px;
+    line-height: 1.08;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+  }
+  h1 .accent { color: var(--coral); }
+  .tagline { font-size: 19px; color: var(--muted); max-width: 540px; margin: 0 auto 44px; }
+  .download {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--coral);
+    color: #1a0f0d;
+    font-weight: 700;
+    font-size: 17px;
+    padding: 16px 30px;
+    border-radius: 12px;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: transform 0.08s ease, background 0.15s ease;
+  }
+  .download:hover { background: #ff7d70; transform: translateY(-1px); }
+  .download:active { transform: translateY(0); }
+  .download.disabled { background: var(--panel); color: var(--muted); cursor: default; pointer-events: none; }
+  .sub { margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .others { margin-top: 36px; }
+  .others summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 14px;
+    list-style: none;
+    user-select: none;
+  }
+  .others summary::-webkit-details-marker { display: none; }
+  .others summary:hover { color: var(--text); }
+  .grid {
+    margin-top: 22px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    text-align: left;
+  }
+  .grid a {
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.15s ease;
+  }
+  .grid a:hover { border-color: var(--coral-dim); }
+  .grid .os { font-weight: 600; font-size: 15px; }
+  .grid .file { font-size: 12px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+  footer { color: var(--muted); font-size: 13px; padding: 32px 0 56px; }
+  footer a { color: var(--muted); }
+  .ver { color: var(--coral); }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="logo">A X I O M</div>
+    <h1>Genuinely-good agentic coding,<br /><span class="accent">free.</span></h1>
+    <p class="tagline">
+      A real coding agent — read, write, edit, run — built to be excellent on
+      free model tiers. Bring your own free keys, or sign in with Google.
+    </p>
+
+    <a id="primary" class="download disabled" href="#">Detecting your platform…</a>
+    <div class="sub" id="sub"></div>
+
+    <details class="others">
+      <summary>All platforms &amp; versions ↓</summary>
+      <div class="grid" id="grid"></div>
+    </details>
+  </main>
+
+  <footer>
+    <span id="ver"></span>
+    <a href="https://github.com/fireboltmagnum/AXIOM">Source on GitHub</a>
+  </footer>
+
+<script>
+  // Repo that hosts the GitHub Releases (installers are attached there).
+  const REPO = "fireboltmagnum/AXIOM";
+  const RELEASES_PAGE = `https://github.com/${REPO}/releases/latest`;
+
+  // Detect OS + CPU arch from the browser. Best-effort; the "All platforms"
+  // list is always available as a fallback.
+  function detect() {
+    const ua = navigator.userAgent;
+    const plat = (navigator.platform || "").toLowerCase();
+    const isArm =
+      /arm|aarch64/i.test(ua) ||
+      (navigator.userAgentData && navigator.userAgentData.platform === "macOS" &&
+        navigator.maxTouchPoints > 0) || false;
+    if (/win/i.test(plat) || /windows/i.test(ua)) return { os: "windows", label: "Windows" };
+    if (/mac/i.test(plat) || /mac os x/i.test(ua)) {
+      // Apple Silicon vs Intel — UA rarely reveals it, default to arm64 (current Macs).
+      return { os: "macos", label: "macOS", arch: isArm ? "arm64" : "intel" };
+    }
+    if (/linux/i.test(plat) || /linux/i.test(ua)) return { os: "linux", label: "Linux" };
+    return { os: null, label: "your platform" };
+  }
+
+  // Map a release asset filename to an OS bucket. Tauri names files like:
+  //   AXIOM_0.1.0_aarch64.dmg  /  AXIOM_0.1.0_x64.dmg  (macOS)
+  //   AXIOM_0.1.0_x64-setup.exe / AXIOM_0.1.0_x64_en-US.msi (Windows)
+  //   axiom_0.1.0_amd64.deb  /  AXIOM_0.1.0_amd64.AppImage (Linux)
+  function classify(name) {
+    const n = name.toLowerCase();
+    if (n.endsWith(".dmg") || n.endsWith(".app.tar.gz")) {
+      return { os: "macos", arch: /aarch64|arm64/.test(n) ? "arm64" : "intel" };
+    }
+    if (n.endsWith(".exe") || n.endsWith(".msi")) return { os: "windows" };
+    if (n.endsWith(".appimage") || n.endsWith(".deb") || n.endsWith(".rpm")) return { os: "linux" };
+    return { os: null };
+  }
+
+  const FRIENDLY = {
+    macos: "macOS",
+    windows: "Windows",
+    linux: "Linux",
+  };
+
+  async function load() {
+    const me = detect();
+    const primary = document.getElementById("primary");
+    const sub = document.getElementById("sub");
+    const grid = document.getElementById("grid");
+    const ver = document.getElementById("ver");
+
+    let release;
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) throw new Error("no release");
+      release = await res.json();
+    } catch (e) {
+      // No published release yet (or API rate-limited) — point at the releases page.
+      primary.textContent = `Download for ${me.label}`;
+      primary.classList.remove("disabled");
+      primary.href = RELEASES_PAGE;
+      sub.innerHTML = `<a style="color:var(--muted)" href="${RELEASES_PAGE}">View all releases →</a>`;
+      return;
+    }
+
+    ver.innerHTML = `AXIOM <span class="ver">${release.tag_name || ""}</span> · `;
+
+    const assets = (release.assets || []).filter((a) => {
+      const n = a.name.toLowerCase();
+      // Hide signatures / update manifests from the human list.
+      return !n.endsWith(".sig") && !n.endsWith(".json");
+    });
+
+    // Pick the best primary download for the detected OS (and arch on mac).
+    let best = null;
+    for (const a of assets) {
+      const c = classify(a.name);
+      if (c.os !== me.os) continue;
+      if (me.os === "macos" && me.arch && c.arch && c.arch !== me.arch && best) continue;
+      // Prefer installers (.dmg/.exe/.AppImage) over archives.
+      const installer = /\.(dmg|exe|msi|appimage)$/i.test(a.name);
+      if (!best || (installer && !/\.(dmg|exe|msi|appimage)$/i.test(best.name))) best = a;
+      if (me.os === "macos" && me.arch && c.arch === me.arch && installer) { best = a; break; }
+    }
+
+    if (best) {
+      primary.textContent = `Download for ${me.label}`;
+      primary.classList.remove("disabled");
+      primary.href = best.browser_download_url;
+      sub.textContent = best.name;
+    } else {
+      primary.textContent = `Download for ${me.label}`;
+      primary.classList.remove("disabled");
+      primary.href = RELEASES_PAGE;
+      sub.textContent = "No build for your platform in the latest release — see all below.";
+    }
+
+    // Build the full grid, grouped by OS.
+    const buckets = { macos: [], windows: [], linux: [] };
+    for (const a of assets) {
+      const c = classify(a.name);
+      if (c.os && buckets[c.os]) buckets[c.os].push(a);
+    }
+    grid.innerHTML = "";
+    for (const os of ["macos", "windows", "linux"]) {
+      for (const a of buckets[os]) {
+        const link = document.createElement("a");
+        link.href = a.browser_download_url;
+        link.innerHTML = `<div class="os">${FRIENDLY[os]}</div><div class="file">${a.name}</div>`;
+        grid.appendChild(link);
+      }
+    }
+    if (!grid.children.length) {
+      grid.innerHTML = `<a href="${RELEASES_PAGE}"><div class="os">All releases</div><div class="file">on GitHub →</div></a>`;
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>

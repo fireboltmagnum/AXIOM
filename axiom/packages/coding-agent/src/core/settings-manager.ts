@@ -76,6 +76,7 @@ export type AxiomFeatureKey =
 	| "knowledgeGraph"
 	| "sparseTreeGrep"
 	| "contextLedger"
+	| "enforcedGather"
 	| "benchmarkMode"
 	| "repairLoop"
 	| "playwrightCli"
@@ -188,6 +189,14 @@ export interface AxiomSettings {
 	contextLedger?: boolean;
 	/** Soft token budget for Context Agent recall after ledger scoring. */
 	contextLedgerMaxTokens?: number;
+	/**
+	 * Enforced final gather: when the agent emits a no-tool draft answer, AXIOM
+	 * discards it, injects a bounded full-content gather block, disables tools
+	 * for one final synthesis call, and returns that fresh answer.
+	 */
+	enforcedGather?: boolean;
+	/** Total byte cap for enforced final gather. Env override: AXIOM_GATHER_BUDGET. */
+	gatherBudgetBytes?: number;
 	/**
 	 * BenchmarkMode: stricter coding-benchmark workflow plus verifier ladders.
 	 * Keeps smaller models disciplined without switching the model.
@@ -306,6 +315,8 @@ export interface ResolvedAxiomSettings {
 	sparseTreeGrepMaxRecall: number;
 	contextLedger: boolean;
 	contextLedgerMaxTokens: number;
+	enforcedGather: boolean;
+	gatherBudgetBytes: number;
 	benchmarkMode: boolean;
 	repairLoop: boolean;
 	repairLoopMaxAttempts: number;
@@ -360,6 +371,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		sparseTreeGrepMaxRecall: 0,
 		contextLedger: false,
 		contextLedgerMaxTokens: 0,
+		enforcedGather: false,
+		gatherBudgetBytes: 200_000,
 		benchmarkMode: false,
 		repairLoop: false,
 		repairLoopMaxAttempts: 0,
@@ -410,6 +423,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		sparseTreeGrepMaxRecall: 0,
 		contextLedger: false,
 		contextLedgerMaxTokens: 0,
+		enforcedGather: true,
+		gatherBudgetBytes: 200_000,
 		benchmarkMode: false,
 		repairLoop: false,
 		repairLoopMaxAttempts: 0,
@@ -460,6 +475,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		sparseTreeGrepMaxRecall: 4,
 		contextLedger: true,
 		contextLedgerMaxTokens: 1400,
+		enforcedGather: true,
+		gatherBudgetBytes: 200_000,
 		benchmarkMode: true,
 		repairLoop: true,
 		repairLoopMaxAttempts: 2,
@@ -510,6 +527,8 @@ const AXIOM_EFFORT_PROFILES: Record<Exclude<AxiomEffortLevel, "custom">, Omit<Re
 		sparseTreeGrepMaxRecall: 8,
 		contextLedger: true,
 		contextLedgerMaxTokens: 2600,
+		enforcedGather: true,
+		gatherBudgetBytes: 200_000,
 		benchmarkMode: true,
 		repairLoop: true,
 		repairLoopMaxAttempts: 3,
@@ -571,6 +590,8 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 			sparseTreeGrepMaxRecall: settings?.sparseTreeGrepMaxRecall ?? profile.sparseTreeGrepMaxRecall,
 			contextLedger: settings?.contextLedger ?? profile.contextLedger,
 			contextLedgerMaxTokens: settings?.contextLedgerMaxTokens ?? profile.contextLedgerMaxTokens,
+			enforcedGather: settings?.enforcedGather ?? profile.enforcedGather,
+			gatherBudgetBytes: settings?.gatherBudgetBytes ?? profile.gatherBudgetBytes,
 			benchmarkMode: settings?.benchmarkMode ?? profile.benchmarkMode,
 			repairLoop: settings?.repairLoop ?? profile.repairLoop,
 			repairLoopMaxAttempts: settings?.repairLoopMaxAttempts ?? profile.repairLoopMaxAttempts,
@@ -623,6 +644,8 @@ function resolveAxiomSettings(settings: AxiomSettings | undefined): ResolvedAxio
 		sparseTreeGrepMaxRecall: settings?.sparseTreeGrepMaxRecall ?? 8,
 		contextLedger: settings?.contextLedger ?? true,
 		contextLedgerMaxTokens: settings?.contextLedgerMaxTokens ?? 2200,
+		enforcedGather: settings?.enforcedGather ?? true,
+		gatherBudgetBytes: settings?.gatherBudgetBytes ?? 200_000,
 		benchmarkMode: settings?.benchmarkMode ?? true,
 		repairLoop: settings?.repairLoop ?? true,
 		repairLoopMaxAttempts: settings?.repairLoopMaxAttempts ?? 2,

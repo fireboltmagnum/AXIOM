@@ -84,6 +84,11 @@ function buildAxiomToolWorkflow(tools: string[]): string {
 	const active = new Set(tools);
 	const lines: string[] = [];
 
+	if (active.has("ask_user_question")) {
+		lines.push(
+			"Use ask_user_question only for consequential ambiguity that tools cannot resolve; prefer one question with explicit options and a recommended first choice. Use selectionMode='multi' only when several options can be selected together.",
+		);
+	}
 	if (active.has("todo_list")) {
 		lines.push(
 			"Use todo_list at the start of work with 3+ steps; update set_current/check/fail/skip as each step changes.",
@@ -124,6 +129,16 @@ function buildAxiomToolWorkflow(tools: string[]): string {
 	if (active.has("playwright_cli")) {
 		lines.push(
 			"Use playwright_cli for browser tests, screenshots, traces, and UI verification when browser behavior matters.",
+		);
+	}
+	if (active.has("web_research")) {
+		lines.push(
+			"Use web_research automatically for current or external facts: search for discovery, fetch known URLs, research for a fast evidence pass, and deep_research for broad, disputed, high-stakes, comparative, or multi-hop questions. Inspect coverage/conflicts, cite [S#] sources with URLs, and never treat snippets alone as detailed evidence.",
+		);
+	}
+	if (active.has("space_snapshot")) {
+		lines.push(
+			"BEFORE any space_* tool call, read the 'space-drawing' skill file and follow it every time — it is the drawing playbook. The single rule: you have no spatial reasoning, so NEVER hand-place a diagram by coordinate (that produces a useless wall of overlapping boxes). For anything with nodes and relationships (flowchart, architecture, sequence, mindmap, class, ER, state, timeline, hierarchy) write tight Mermaid and call space_mermaid — the engine lays it out. Use space_node + space_cluster for AXIOM's own thinking (tasks/plans/research/decisions). Use a SMALL deliberate set of space_draw shapes only for a literal freeform picture; if you exceed ~12 hand-placed shapes it should have been Mermaid. Call space_snapshot before editing an existing board and edit by id. Keep related work in labeled frames, avoid overlaps, and materialize conclusions rather than private chain-of-thought.",
 		);
 	}
 

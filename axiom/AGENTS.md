@@ -38,6 +38,16 @@
 
 Use the AXIOM tools deliberately. They are meant to reduce guessing before edits, not replace reading exact source when exact source matters.
 
+### `ask_user_question`
+
+- Use `ask_user_question` only when the answer materially changes scope, architecture, cost, safety, permissions, or an irreversible operation.
+- Do not ask the user for facts that can be discovered with `read`, `rg`, `understand_code`, `code_graph`, `flow_graph`, `web_research`, or another available tool.
+- Prefer one question. Use no more than three.
+- When choices are known, provide concise options, put the recommended choice first when one exists, and explain each tradeoff in one sentence.
+- Use `selectionMode="single"` for mutually exclusive choices. Use `selectionMode="multi"` only when several options can be selected together.
+- Allow a free-form answer unless the choices are genuinely exhaustive.
+- Do not use the tool to delay work, ask low-impact styling preferences, or seek confirmation for a reasonable reversible implementation choice.
+
 ### `todo_list`
 
 - Use `todo_list` for any task with 3+ discrete steps, any long-running implementation, or any task where progress can become ambiguous.
@@ -88,6 +98,43 @@ Use the AXIOM tools deliberately. They are meant to reduce guessing before edits
 - Use `sparse_tree_grep action=extract` only after search/expand/describe has narrowed the target. Extract exact source text before quoting, summarizing a specific passage, or making fine-grained claims.
 - Preferred workflow for "find the fight scene between Anna and Gosh": `compile` the book if needed, `search` the natural-language query, `describe` the top few candidate chunks, then `extract` the exact chunk that matches.
 
+### `web_research`
+
+- Use `web_research` automatically when the answer depends on current, external, unstable, recommendation, product, API, standards, legal, financial, medical, news, or source-attributed information.
+- Use `action=search` for fast discovery and ranked snippets. Supply up to four focused query variants when one wording may miss relevant terminology.
+- Use `action=fetch` when the relevant URLs are already known. It validates public URLs, follows safe redirects, extracts readable full content, and falls back to Jina Reader for PDFs or script-heavy pages.
+- Use `action=research` when accuracy or completeness requires evidence from multiple sources. It federates configured Brave, Tavily, Exa, and Jina providers, falls back to public Bing and DuckDuckGo search without a key, merges results with reciprocal-rank fusion, deduplicates canonical URLs, preserves domain diversity, and fetches the strongest pages into a bounded evidence pack.
+- Use `action=deep_research` for broad, disputed, high-stakes, comparative, or multi-hop questions. It runs bounded iterative query rounds, expands uncovered concepts, prioritizes independent primary sources, scores full evidence, audits claims, and flags potential numerical conflicts before synthesis.
+- Keep `browser=auto` for deep research. Native/Jina extraction stays the fast path; Playwright is used only when a selected JavaScript-rendered page has missing or thin content. Use `browser=force` only when the target is known to require client rendering.
+- Inspect the returned coverage score, remaining gaps, claim audit, and potential conflicts. Run a more focused follow-up when important concepts remain uncovered rather than papering over the gap in prose.
+- For technical questions, prioritize primary sources and official documentation. Use `includeDomains` when the authoritative domains are known.
+- For current events, set `topic=news` and an appropriate `freshness`. Compare publication dates and event dates rather than assuming the newest-looking result is the latest event.
+- Search snippets are discovery leads only. Fetch full content before making detailed claims, quoting, comparing specifications, or concluding that a source supports a claim.
+- Cite externally verifiable claims using the returned `[S#]` source IDs and include their URLs. If sources disagree, fetch more primary evidence and state the conflict.
+- Configure optional providers with `BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, or `JINA_API_KEY`. Never print, store, or expose those keys in tool output.
+
+### `benchmark_test`
+
+- Use `benchmark_test` when the user asks to benchmark AXIOM, compare AXIOM to agentic benchmarks, build benchmark adapters, or stress-test AXIOM-native tools.
+- Use `benchmark_test action=registry` to inspect the 50+ public benchmark catalog and category counts.
+- Use `benchmark_test action=list` with `category`, `adapter`, or `query` to find relevant public benchmarks or local stress cases.
+- Use `benchmark_test action=stress` after changing AXIOM-native tools. It runs fast local checks for `CodeAnalyzer`, `SparseTreeGrep`, `code_graph`, `flow_graph`, `knowledge_graph`, `todo_list`, Streaming IP gating, PatchRiskGate, RepairLoop, and ContextLedger.
+- Use `benchmark_test action=plan` before attempting an external benchmark. The plan tells you which external harness/repo must be installed and how to bind AXIOM as the tested agent.
+- Never claim AXIOM has a score on SWE-bench, Terminal-Bench, OSWorld, GAIA, WebArena, or any other external benchmark unless that external harness actually ran and produced a result.
+
+### Space canvas tools
+
+- Space tools are available only when the desktop Space host is attached. Use `space_snapshot` before editing an existing board so element ids, positions, links, and visible context are known.
+- Use `space_draw` for native editable Excalidraw rectangles, ellipses, diamonds, text, notes, arrows, lines, freehand paths, frames, local images, and Mermaid diagrams. Set stroke/fill colors, width/style, edge roundness, roughness, opacity, font family/size, alignment, arrowheads, links, lock state, and points when they matter. For `shape=image`, pass an absolute local `path`.
+- Use `space_node` when the object has semantic meaning: `thought`, `task`, `plan`, `research`, `browser`, `artifact`, or `folder`. Populate summary/status/progress plus sources, findings, decisions, evidence, and dependencies when available; this is preferred over plain rectangles for visible work products.
+- Use `space_cluster` after creating several semantic nodes so the board forms typed regions instead of scattered cards.
+- Prefer native `text` and `note` elements over media cards for prose. Native elements stay in the Excalidraw layer stack and expose the same selection, resize, grouping, and styling controls as user-created objects.
+- Use `space_mermaid` for architecture, flowchart, sequence, state, class, and ER diagrams. It converts Mermaid into normal editable Excalidraw shapes and connectors; do not render Mermaid as a screenshot or opaque image.
+- Use `space_style` to revise text and visual properties after creation instead of deleting and redrawing a correct object.
+- Use `space_move` for position/size changes, `space_connect` for semantic relationships, `space_group` for objects that should move together, `space_reorder` for layer order, `space_duplicate` for repeated structures, and `space_delete` only for confirmed removals.
+- Make Space work visible: create or update objects as evidence becomes available, keep related objects in coherent regions, avoid overlaps, and use frames to name major regions. Do not expose private chain-of-thought; create concise decision, evidence, task, research, and artifact objects instead.
+- When asked to create a board from research or code, use the normal research/code tools first, then materialize verified findings in Space. Canvas tools do not replace source inspection.
+
 ### RepairLoop + FailureFingerprintIndex
 
 - RepairLoop runs automatically after code edits when AXIOM settings enable it. Do not manually trigger broad verification before the automatic loop has a chance to run.
@@ -117,10 +164,14 @@ Use the AXIOM tools deliberately. They are meant to reduce guessing before edits
 ### Tool Selection Order
 
 - For multi-step work, create/update `todo_list` first.
+- For a consequential unresolved decision that available tools cannot answer, use `ask_user_question`.
 - For unfamiliar code structure, run `understand_code`.
 - For cross-file relationships, run `code_graph`.
 - For behavior/data/effects/debugging, run `flow_graph`.
 - For long non-code documents, run `sparse_tree_grep compile/search/describe/extract`.
+- For live external facts or source-backed research, run `web_research search/fetch/research/deep_research`.
+- For AXIOM benchmark questions or tool health checks, run `benchmark_test registry/list/plan/stress`.
+- In Space, inspect with `space_snapshot`, then use native canvas tools (`space_draw`/`space_mermaid` plus style, move, connect, group, reorder, duplicate, or delete) as the task requires.
 - For exact source truth, use `read`.
 - For exact textual search, use `rg`/`find`/`ls` before broad shell commands.
 

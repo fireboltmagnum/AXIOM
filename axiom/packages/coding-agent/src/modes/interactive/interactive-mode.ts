@@ -60,6 +60,7 @@ import {
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import { normalizeGoalInput } from "../../core/background-goal.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -1953,6 +1954,9 @@ export class InteractiveMode {
 			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
+			hostCall: async () => {
+				throw new Error("host_call is only available when running under an embedding host (RPC mode)");
+			},
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -2546,6 +2550,18 @@ export class InteractiveMode {
 				await this.handleCompactCommand(customInstructions);
 				return;
 			}
+			if (text === "/goal" || text.startsWith("/goal ")) {
+				const arg = text === "/goal" ? "" : text.slice(6).trim();
+				this.editor.setText("");
+				this.handleGoalCommand(arg);
+				return;
+			}
+			if (text === "/steer" || text.startsWith("/steer ")) {
+				const arg = text === "/steer" ? "" : text.slice(7).trim();
+				this.editor.setText("");
+				await this.handleSteerCommand(arg);
+				return;
+			}
 			if (text === "/reload") {
 				this.editor.setText("");
 				await this.handleReloadCommand();
@@ -2783,6 +2799,17 @@ export class InteractiveMode {
 							}
 						}
 					}
+					this.ui.requestRender();
+				}
+				break;
+
+			case "message_discard":
+				if (event.message.role === "assistant" && this.streamingComponent) {
+					this.chatContainer.removeChild(this.streamingComponent);
+					this.streamingComponent = undefined;
+					this.streamingMessage = undefined;
+					this.pendingTools.clear();
+					this.footer.invalidate();
 					this.ui.requestRender();
 				}
 				break;
@@ -5224,6 +5251,62 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	/**
+	 * /goal — set, show, or clear the persistent background goal the agent pursues
+	 * across turns. No arg shows the current goal; "clear"/"none" removes it.
+	 */
+	private handleGoalCommand(arg: string): void {
+		// No argument: show the current goal.
+		if (!arg) {
+			const current = this.session.getBackgroundGoal();
+			this.chatContainer.addChild(new Spacer(1));
+			if (current) {
+				this.chatContainer.addChild(new Text(theme.fg("dim", `Background goal: ${current}`), 1, 0));
+				this.chatContainer.addChild(new Text(theme.fg("dim", "Use /goal clear to remove it."), 1, 0));
+			} else {
+				this.chatContainer.addChild(
+					new Text(theme.fg("dim", "No background goal set. Usage: /goal <objective>"), 1, 0),
+				);
+			}
+			this.ui.requestRender();
+			return;
+		}
+
+		const normalized = normalizeGoalInput(arg);
+		this.session.setBackgroundGoal(normalized);
+		this.chatContainer.addChild(new Spacer(1));
+		if (normalized) {
+			this.chatContainer.addChild(new Text(theme.fg("dim", `Background goal set: ${normalized}`), 1, 0));
+			this.chatContainer.addChild(
+				new Text(theme.fg("dim", "The agent will keep pursuing this across turns until you /goal clear."), 1, 0),
+			);
+		} else {
+			this.chatContainer.addChild(new Text(theme.fg("dim", "Background goal cleared."), 1, 0));
+		}
+		this.ui.requestRender();
+	}
+
+	/**
+	 * /steer — inject a message for the agent mid-task. While the agent is streaming
+	 * it is queued as a steering message (delivered at the next turn boundary); when
+	 * idle it is sent as a normal prompt so it isn't silently swallowed.
+	 */
+	private async handleSteerCommand(arg: string): Promise<void> {
+		if (!arg) {
+			this.showWarning("Usage: /steer <message>");
+			return;
+		}
+		this.editor.addToHistory?.(arg);
+		if (this.session.isStreaming) {
+			await this.session.steer(arg);
+			this.updatePendingMessagesDisplay();
+			this.ui.requestRender();
+			return;
+		}
+		// Idle: nothing is running to steer, so send it as a normal prompt.
+		await this.session.prompt(arg);
 	}
 
 	private handleSessionCommand(): void {

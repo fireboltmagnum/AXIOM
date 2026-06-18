@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
+import type { VerifyWorkspaceFn } from "./ParallelRolloutOrchestrator.ts";
 import { RepairLoop } from "./RepairLoop.ts";
 import type { RolloutVerification } from "./RolloutCoordinator.ts";
 import type { RolloutWorkspace } from "./RolloutWorkspaceManager.ts";
-import type { VerifyWorkspaceFn } from "./ParallelRolloutOrchestrator.ts";
 
 /**
  * The verifier half of the live parallel-rollout adapter.

@@ -43,3 +43,19 @@ packages/*/node_modules/
 # yarn.lock
 # pnpm-lock.yaml
 .git.bak
+
+# Local-only Claude Code state (sessions, memory, settings) — never publish
+.claude/
+
+# AXIOM agent run traces (may contain prompts/paths) — local only
+.axiom/
+
+# Impeccable design-hook local state
+.impeccable/
+
+# Large working design files (local only)
+axiom/docs/ui.excalidraw
+
+# Generated per-platform desktop agent runtime (built on each host/CI runner)
+axiom/packages/desktop/src-tauri/resources/agent/
+axiom/packages/desktop/src-tauri/target/

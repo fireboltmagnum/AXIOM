@@ -125,6 +125,9 @@ export interface ExtensionUIContext {
 	/** Show a selector and return the user's choice. */
 	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
+	/** Show a multi-select checklist and return the selected choices. */
+	multiSelect?(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string[] | undefined>;
+
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
 
@@ -133,6 +136,16 @@ export interface ExtensionUIContext {
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;
+
+	/**
+	 * Call out to the embedding host application and await a JSON result.
+	 *
+	 * This is the generic bridge for host-provided capabilities (e.g. the
+	 * desktop Space surface exposing canvas operations as agent tools). Only
+	 * the RPC mode implements it against a real host; interactive/print modes
+	 * reject, since there is no host to answer.
+	 */
+	hostCall<T = unknown>(channel: string, op: string, payload?: unknown, opts?: ExtensionUIDialogOptions): Promise<T>;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;

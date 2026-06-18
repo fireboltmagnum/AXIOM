@@ -1,0 +1,30 @@
+#!/bin/sh
+# axiom-app — launch the AXIOM desktop app from ANY directory. The directory you
+# run it from becomes the agent's project root (AXIOM_CWD), so the real agent reads
+# and edits the files where you are. Symlink this onto your PATH:
+#   ln -sf "<repo>/axiom/packages/desktop/bin/axiom-app" /opt/homebrew/bin/axiom-app
+#
+# Prefers a real installed/built app; falls back to `tauri dev` for development.
+
+DESKTOP="/Users/tinkerspace/Downloads/AXIOM/AXIOM-Pi.dev inspire/axiom/packages/desktop"
+
+# The folder you invoked from — what the agent should operate on.
+AXIOM_CWD="$(pwd)"
+export AXIOM_CWD
+
+INSTALLED="/Applications/AXIOM.app/Contents/MacOS/axiom-desktop"
+REL_BIN="$DESKTOP/src-tauri/target/release/axiom-desktop"
+REL_APP="$DESKTOP/src-tauri/target/release/bundle/macos/AXIOM.app/Contents/MacOS/axiom-desktop"
+
+if [ -x "$INSTALLED" ]; then
+  exec "$INSTALLED"
+elif [ -x "$REL_APP" ]; then
+  exec "$REL_APP"
+elif [ -x "$REL_BIN" ]; then
+  exec "$REL_BIN"
+else
+  # No production build yet — run in dev (compiles + starts the Vite server).
+  echo "axiom-app: no built app found, starting dev build in $DESKTOP …" >&2
+  cd "$DESKTOP" || exit 1
+  exec npm run dev
+fi

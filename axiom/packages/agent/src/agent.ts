@@ -21,6 +21,7 @@ import type {
 	AgentTool,
 	BeforeToolCallContext,
 	BeforeToolCallResult,
+	PrepareFinalAnswerContext,
 	QueueMode,
 	StreamFn,
 	ToolExecutionMode,
@@ -106,6 +107,10 @@ export interface AgentOptions {
 	prepareNextTurn?: (
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	prepareFinalAnswer?: (
+		context: PrepareFinalAnswerContext,
+		signal?: AbortSignal,
+	) => Promise<AgentMessage[] | undefined> | AgentMessage[] | undefined;
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
@@ -186,6 +191,10 @@ export class Agent {
 	public prepareNextTurn?: (
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	public prepareFinalAnswer?: (
+		context: PrepareFinalAnswerContext,
+		signal?: AbortSignal,
+	) => Promise<AgentMessage[] | undefined> | AgentMessage[] | undefined;
 	private activeRun?: ActiveRun;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
@@ -209,6 +218,7 @@ export class Agent {
 		this.beforeToolCall = options.beforeToolCall;
 		this.afterToolCall = options.afterToolCall;
 		this.prepareNextTurn = options.prepareNextTurn;
+		this.prepareFinalAnswer = options.prepareFinalAnswer;
 		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
@@ -434,6 +444,9 @@ export class Agent {
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn: this.prepareNextTurn ? async () => await this.prepareNextTurn?.(this.signal) : undefined,
+			prepareFinalAnswer: this.prepareFinalAnswer
+				? async (context) => await this.prepareFinalAnswer?.(context, this.signal)
+				: undefined,
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,

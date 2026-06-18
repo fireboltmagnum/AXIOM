@@ -24,6 +24,11 @@ import type {
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
+interface AssistantResponseResult {
+	message: AssistantMessage;
+	finalPreparationMessages?: AgentMessage[];
+}
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -163,6 +168,8 @@ async function runLoop(
 	let currentContext = initialContext;
 	let config = initialConfig;
 	let firstTurn = true;
+	let finalAnswerPrepared = false;
+	let forceFinalAnswerPass = false;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
@@ -190,7 +197,30 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
+			const restoreToolsAfterFinalPass = forceFinalAnswerPass ? currentContext.tools : undefined;
+			if (forceFinalAnswerPass) {
+				currentContext = { ...currentContext, tools: [] };
+				forceFinalAnswerPass = false;
+			}
+			const response = await streamAssistantResponse(
+				currentContext,
+				config,
+				signal,
+				emit,
+				streamFn,
+				!finalAnswerPrepared,
+			);
+			if (restoreToolsAfterFinalPass !== undefined) {
+				currentContext = { ...currentContext, tools: restoreToolsAfterFinalPass };
+			}
+			const message = response.message;
+			if (response.finalPreparationMessages?.length) {
+				finalAnswerPrepared = true;
+				forceFinalAnswerPass = true;
+				pendingMessages = response.finalPreparationMessages;
+				await emit({ type: "turn_end", message, toolResults: [] });
+				continue;
+			}
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -278,7 +308,8 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 	streamFn?: StreamFn,
-): Promise<AssistantMessage> {
+	allowFinalPreparation = false,
+): Promise<AssistantResponseResult> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
@@ -342,6 +373,17 @@ async function streamAssistantResponse(
 			case "done":
 			case "error": {
 				const finalMessage = await response.result();
+				const finalPreparationMessages =
+					event.type === "done" && allowFinalPreparation
+						? await prepareFinalAnswerMessages(finalMessage, context, config, addedPartial)
+						: undefined;
+				if (finalPreparationMessages?.length) {
+					if (addedPartial) {
+						context.messages.pop();
+					}
+					await emit({ type: "message_discard", message: finalMessage, reason: "final_gather" });
+					return { message: finalMessage, finalPreparationMessages };
+				}
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -351,12 +393,22 @@ async function streamAssistantResponse(
 					await emit({ type: "message_start", message: { ...finalMessage } });
 				}
 				await emit({ type: "message_end", message: finalMessage });
-				return finalMessage;
+				return { message: finalMessage };
 			}
 		}
 	}
 
 	const finalMessage = await response.result();
+	const finalPreparationMessages = allowFinalPreparation
+		? await prepareFinalAnswerMessages(finalMessage, context, config, addedPartial)
+		: undefined;
+	if (finalPreparationMessages?.length) {
+		if (addedPartial) {
+			context.messages.pop();
+		}
+		await emit({ type: "message_discard", message: finalMessage, reason: "final_gather" });
+		return { message: finalMessage, finalPreparationMessages };
+	}
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {
@@ -364,7 +416,39 @@ async function streamAssistantResponse(
 		await emit({ type: "message_start", message: { ...finalMessage } });
 	}
 	await emit({ type: "message_end", message: finalMessage });
-	return finalMessage;
+	return { message: finalMessage };
+}
+
+async function prepareFinalAnswerMessages(
+	message: AssistantMessage,
+	context: AgentContext,
+	config: AgentLoopConfig,
+	addedPartial: boolean,
+): Promise<AgentMessage[] | undefined> {
+	if (!config.prepareFinalAnswer || !isUserFacingFinalAnswerCandidate(message)) {
+		return undefined;
+	}
+
+	const originalMessages = context.messages;
+	const messagesForHook =
+		addedPartial && originalMessages.length > 0 ? originalMessages.slice(0, -1) : originalMessages;
+	const hookContext: AgentContext = { ...context, messages: messagesForHook };
+	try {
+		const messages = await config.prepareFinalAnswer({ draft: message, context: hookContext });
+		return messages?.length ? messages : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isUserFacingFinalAnswerCandidate(message: AssistantMessage): boolean {
+	if (message.stopReason === "error" || message.stopReason === "aborted") {
+		return false;
+	}
+	if (message.content.some((part) => part.type === "toolCall")) {
+		return false;
+	}
+	return message.content.some((part) => part.type === "text" && part.text.trim().length > 0);
 }
 
 /**

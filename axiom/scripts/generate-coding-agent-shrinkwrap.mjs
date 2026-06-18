@@ -12,7 +12,9 @@ const shrinkwrapPath = join(codingAgentDir, "npm-shrinkwrap.json");
 const internalPackagePrefix = "@axiom/";
 const allowedInstallScriptPackages = new Map([
 	["@google/genai@1.52.0", "preinstall is a no-op in the published package"],
+	["protobufjs@6.11.6", "postinstall only warns about protobufjs version scheme mismatches"],
 	["protobufjs@7.6.1", "postinstall only warns about protobufjs version scheme mismatches"],
+	["sharp@0.32.6", "install selects or builds the native libvips image-processing binary required by transformers"],
 ]);
 
 const args = new Set(process.argv.slice(2));

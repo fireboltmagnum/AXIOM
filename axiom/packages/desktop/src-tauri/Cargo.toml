@@ -1,0 +1,27 @@
+[package]
+name = "axiom-desktop"
+version = "0.1.0"
+description = "AXIOM Desktop — Chat · Space · Dashboard · IDE, with the real agent in-process"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+# PKCE for Codex (ChatGPT) OAuth — already in the dependency tree transitively.
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

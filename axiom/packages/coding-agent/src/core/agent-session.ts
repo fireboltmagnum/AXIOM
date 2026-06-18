@@ -15,7 +15,15 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@axiom/agent-core";
+import type {
+	Agent,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	PrepareFinalAnswerContext,
+	ThinkingLevel,
+} from "@axiom/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@axiom/ai";
 import {
 	clampThinkingLevel,
@@ -29,10 +37,12 @@ import {
 import { AutoRollback } from "../axiom/AutoRollback.ts";
 import { AXIOMRuntime } from "../axiom/AXIOMRuntime.ts";
 import { BestOfNCoordinator } from "../axiom/BestOfNCoordinator.ts";
+import { GatherPhase, type GatherTarget, renderGatherPack } from "../axiom/GatherPhase.ts";
 import { GraphExecutionTracker } from "../axiom/GraphExecutionTracker.ts";
 import type { PatchRiskSnapshot } from "../axiom/PatchRiskGate.ts";
 import { RepairLoop } from "../axiom/RepairLoop.ts";
 import type { AxiomTaskClassification, AxiomTaskPlan } from "../axiom/RuntimeTypes.ts";
+import { SparseTreeGrepStore } from "../axiom/SparseTreeGrepStore.ts";
 import { StreamingIPOutputGate, type StreamingIPValidator } from "../axiom/StreamingIPValidator.ts";
 import { SubgoalVerifier } from "../axiom/SubgoalVerifier.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
@@ -40,6 +50,7 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import { formatBackgroundGoalBlock } from "./background-goal.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
@@ -93,6 +104,80 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+
+function renderSparseTreeGrepGatherBlock(extracts: readonly { label: string; text: string }[], budget: number): string {
+	if (extracts.length === 0 || budget <= 0) return "";
+	const out = ["=== GATHER PHASE: exact SparseTreeGrep extracts already engaged ==="];
+	out.push("These are exact source payloads from SparseTreeGrep extract/search-with-extract calls, not descriptions.");
+	let remaining = budget;
+	for (const extract of extracts) {
+		const text = clampTextBytes(extract.text, remaining);
+		if (!text) break;
+		out.push("");
+		out.push(`--- ${extract.label} (${Buffer.byteLength(text, "utf-8")} bytes) ---`);
+		out.push(text);
+		remaining -= Buffer.byteLength(text, "utf-8");
+	}
+	return out.length > 2 ? out.join("\n").trimEnd() : "";
+}
+
+function renderWebResearchGatherBlock(extracts: readonly { label: string; text: string }[], budget: number): string {
+	if (extracts.length === 0 || budget <= 0) return "";
+	const out = ["=== GATHER PHASE: full web evidence already investigated ==="];
+	out.push(
+		"This is the bounded full-content evidence dossier produced by web_research. Preserve citations, source URLs, conflicts, and evidence gaps in the final answer.",
+	);
+	let remaining = budget;
+	for (const extract of extracts) {
+		const text = clampTextBytes(extract.text, remaining);
+		if (!text) break;
+		out.push("", `--- ${extract.label} (${Buffer.byteLength(text, "utf-8")} bytes) ---`, text);
+		remaining -= Buffer.byteLength(text, "utf-8");
+	}
+	return out.length > 2 ? out.join("\n").trimEnd() : "";
+}
+
+/**
+ * Pull a retry delay (ms) out of a provider 429 error. Free Gemini / Code
+ * Assist report it as `retryDelay: "55s"`, `"Please retry in 55.2s"`, or
+ * `"reset after 24s"`. Returns undefined when no hint is present.
+ */
+function extractRetryDelayMs(errorMessage: string | undefined): number | undefined {
+	if (!errorMessage) return undefined;
+	const patterns = [
+		/retryDelay\\?"?\s*:\s*\\?"?(\d+(?:\.\d+)?)s/i,
+		/retry in (\d+(?:\.\d+)?)\s*s/i,
+		/reset after (\d+(?:\.\d+)?)\s*s/i,
+	];
+	for (const re of patterns) {
+		const m = re.exec(errorMessage);
+		if (m) {
+			const seconds = Number.parseFloat(m[1]);
+			if (Number.isFinite(seconds) && seconds > 0) {
+				// Add a small cushion so we land just past the window edge.
+				return Math.ceil(seconds * 1000) + 500;
+			}
+		}
+	}
+	return undefined;
+}
+
+function clampTextBytes(text: string, budget: number): string {
+	if (budget <= 0) return "";
+	const bytes = Buffer.byteLength(text, "utf-8");
+	if (bytes <= budget) return text;
+	const marker = "\n... [truncated by AXIOM_GATHER_BUDGET] ...\n";
+	const markerBytes = Buffer.byteLength(marker, "utf-8");
+	if (budget <= markerBytes + 32) {
+		return Buffer.from(text, "utf-8").subarray(0, budget).toString("utf-8");
+	}
+	const headBudget = Math.floor((budget - markerBytes) * 0.7);
+	const tailBudget = budget - markerBytes - headBudget;
+	const buf = Buffer.from(text, "utf-8");
+	return `${buf.subarray(0, headBudget).toString("utf-8")}${marker}${buf
+		.subarray(buf.length - tailBudget)
+		.toString("utf-8")}`;
+}
 
 // ============================================================================
 // Skill Block Parsing
@@ -276,6 +361,8 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
+export type ToolPermissionMode = "ask" | "edit" | "plan" | "auto" | "bypass";
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -291,6 +378,16 @@ const LOCAL_USAGE = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+const PERMISSION_APPROVAL_TOOL_NAMES = new Set([
+	"bash",
+	"benchmark_test",
+	"edit",
+	"execute_code",
+	"playwright_cli",
+	"write",
+]);
+const TOOL_PERMISSION_MODES = new Set<ToolPermissionMode>(["ask", "edit", "plan", "auto", "bypass"]);
 
 // ============================================================================
 // AgentSession Class
@@ -313,6 +410,8 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	/** Persistent background goal (/goal): folded into every prompt's system prompt until cleared. */
+	private _backgroundGoal: string | undefined;
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -360,6 +459,7 @@ export class AgentSession {
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
+	private _toolPermissionMode: ToolPermissionMode = "auto";
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -443,6 +543,7 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
+		this.agent.prepareFinalAnswer = (context) => this._prepareAxiomFinalAnswer(context);
 		this._installAgentToolHooks();
 
 		this._buildRuntime({
@@ -515,6 +616,15 @@ export class AgentSession {
 		);
 	}
 
+	private _shouldAutoEnableBenchmarkTest(): boolean {
+		const settings = this.settingsManager.getAxiomSettings();
+		return (
+			settings.enabled &&
+			settings.benchmarkMode &&
+			(!this._allowedToolNames || this._allowedToolNames.has("benchmark_test"))
+		);
+	}
+
 	private _withAxiomManagedTools(toolNames: string[]): string[] {
 		// AXIOM-managed tools (todo_list, understand_code, code_graph, …) are
 		// built-ins. When the default built-in tools are disabled, they must not
@@ -523,6 +633,9 @@ export class AgentSession {
 			return toolNames;
 		}
 		const next = new Set(toolNames);
+		if (!this._allowedToolNames || this._allowedToolNames.has("ask_user_question")) {
+			next.add("ask_user_question");
+		}
 		if (!this._allowedToolNames || this._allowedToolNames.has("todo_list")) {
 			next.add("todo_list");
 		}
@@ -555,6 +668,11 @@ export class AgentSession {
 			next.add("playwright_cli");
 		} else {
 			next.delete("playwright_cli");
+		}
+		if (this._shouldAutoEnableBenchmarkTest()) {
+			next.add("benchmark_test");
+		} else {
+			next.delete("benchmark_test");
 		}
 		return [...next];
 	}
@@ -1270,7 +1388,206 @@ export class AgentSession {
 		return textBlocks.map((c) => (c as TextContent).text).join("");
 	}
 
+	private _prepareAxiomFinalAnswer(context: PrepareFinalAnswerContext): AgentMessage[] | undefined {
+		const settings = this.settingsManager.getAxiomSettings();
+		if (!settings.enabled || !settings.enforcedGather) return undefined;
+		const envToggle = process.env.AXIOM_ENFORCED_GATHER?.trim().toLowerCase();
+		if (envToggle === "0" || envToggle === "false" || envToggle === "off") return undefined;
+
+		const maxBytes = this._resolveFinalGatherBudget(settings);
+		if (maxBytes <= 0) return undefined;
+
+		const targets = this._collectFinalGatherTargets(context.context.messages);
+		const sparseBudget = Math.floor(maxBytes * 0.3);
+		const webBudget = Math.floor(maxBytes * 0.45);
+		const sparseTreeExtracts = this._collectSparseTreeGrepExactExtracts(context.context.messages, sparseBudget);
+		const webResearchExtracts = this._collectWebResearchEvidence(context.context.messages, webBudget);
+		const reservedBytes = [...sparseTreeExtracts, ...webResearchExtracts].reduce(
+			(total, extract) => total + Buffer.byteLength(extract.text, "utf-8"),
+			0,
+		);
+		const fileBudget = Math.max(0, maxBytes - reservedBytes);
+		const phase = new GatherPhase();
+		const pack = phase.build(targets, {
+			cwd: this._cwd,
+			maxBytes: fileBudget,
+			maxBytesPerFile: Math.min(60_000, fileBudget),
+		});
+		const gatheredFiles = renderGatherPack(pack);
+		const gatheredDocuments = renderSparseTreeGrepGatherBlock(sparseTreeExtracts, sparseBudget);
+		const gatheredWebEvidence = renderWebResearchGatherBlock(webResearchExtracts, webBudget);
+		if (!gatheredFiles && !gatheredDocuments && !gatheredWebEvidence) return undefined;
+
+		const content = [
+			"=== AXIOM ENFORCED FINAL SYNTHESIS ===",
+			"The previous no-tool assistant response was discarded as a draft. This is the actual final-answer pass.",
+			"Use the full gathered material below to produce a complete final answer now. Do not write from SparseTreeGrep descriptions, web search snippets, compressed recall, or memory when the full content below is relevant.",
+			"Tools are disabled for this pass; answer directly and completely from the gathered context.",
+			gatheredFiles,
+			gatheredDocuments,
+			gatheredWebEvidence,
+			"=== FINAL ANSWER INSTRUCTION ===",
+			"Produce the complete user-facing answer/artifact now. Preserve relevant details from the gathered full content, mention any gathered file omitted by budget if that omission affects certainty, and do not ask for more retrieval unless the answer would otherwise be false.",
+		]
+			.filter(Boolean)
+			.join("\n\n");
+
+		return [
+			{
+				role: "custom",
+				customType: "axiom_final_gather",
+				content,
+				display: false,
+				details: {
+					fileCount: pack.files.length,
+					totalBytes: pack.totalBytes,
+					omitted: pack.omitted,
+					missing: pack.missing,
+					sparseTreeExtractCount: sparseTreeExtracts.length,
+					webResearchExtractCount: webResearchExtracts.length,
+					budgetBytes: maxBytes,
+				},
+				timestamp: Date.now(),
+			} satisfies CustomMessage,
+		];
+	}
+
+	private _resolveFinalGatherBudget(settings: ResolvedAxiomSettings): number {
+		const env = Number.parseInt(process.env.AXIOM_GATHER_BUDGET ?? "", 10);
+		if (Number.isFinite(env) && env > 0) return env;
+		return Math.max(0, settings.gatherBudgetBytes);
+	}
+
+	private _collectFinalGatherTargets(messages: readonly AgentMessage[]): GatherTarget[] {
+		const byFile = new Map<string, number>();
+		const add = (file: unknown, priority: number) => {
+			if (typeof file !== "string") return;
+			const trimmed = file.trim();
+			if (!trimmed) return;
+			byFile.set(trimmed, Math.max(byFile.get(trimmed) ?? Number.NEGATIVE_INFINITY, priority));
+		};
+		const addFiles = (files: unknown, priority: number) => {
+			if (!Array.isArray(files)) return;
+			for (const file of files) add(file, priority);
+		};
+
+		for (const file of this._repairLoopPendingFiles) {
+			add(file, 1_000_000);
+		}
+		for (let i = 0; i < messages.length; i++) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			const recency = i * 10;
+			for (const part of message.content) {
+				if (part.type !== "toolCall") continue;
+				const args = part.arguments ?? {};
+				switch (part.name) {
+					case "edit":
+					case "write":
+						add(args.path, 900_000 + recency);
+						break;
+					case "gather_context":
+						addFiles(args.files, 850_000 + recency);
+						break;
+					case "read":
+						add(args.path, 700_000 + recency);
+						break;
+					case "understand_code":
+					case "code_graph":
+					case "flow_graph":
+						add(args.path, 500_000 + recency);
+						break;
+				}
+			}
+		}
+
+		return [...byFile.entries()].map(([file, priority]) => ({ file, priority }));
+	}
+
+	private _collectSparseTreeGrepExactExtracts(
+		messages: readonly AgentMessage[],
+		maxBytes: number,
+	): Array<{ label: string; text: string }> {
+		const extracts: Array<{ label: string; text: string }> = [];
+		let remaining = Math.max(0, Math.floor(maxBytes * 0.35));
+		const seen = new Set<string>();
+		const store = new SparseTreeGrepStore();
+		for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+			const message = messages[i];
+			if (message.role !== "toolResult" || message.toolName !== "sparse_tree_grep" || message.isError) continue;
+			const details = message.details as
+				| {
+						hits?: Array<{ documentId?: string; documentName?: string; chunkId?: string }>;
+						action?: string;
+				  }
+				| undefined;
+			for (const hit of details?.hits ?? []) {
+				if (!hit.documentId || !hit.chunkId || remaining <= 0) continue;
+				const key = `${hit.documentId}:${hit.chunkId}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				try {
+					const exact = store.extract(hit.documentId, hit.chunkId, 0);
+					const label = `${hit.documentName ?? exact.hit.documentName} ${hit.chunkId}`;
+					const clamped = clampTextBytes(exact.text, remaining);
+					if (!clamped) continue;
+					extracts.push({ label, text: clamped });
+					remaining -= Buffer.byteLength(clamped, "utf-8");
+				} catch {
+					// Missing/stale SparseTreeGrep indexes should never block final synthesis.
+				}
+			}
+			const text = message.content
+				.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("\n");
+			if (!/(^|\n)(Exact extract from|# Exact top hit\b)/.test(text)) continue;
+			const clamped = clampTextBytes(text, remaining);
+			if (!clamped) continue;
+			extracts.push({
+				label: `sparse_tree_grep:${message.toolCallId}`,
+				text: clamped,
+			});
+			remaining -= Buffer.byteLength(clamped, "utf-8");
+		}
+		return extracts.reverse();
+	}
+
+	private _collectWebResearchEvidence(
+		messages: readonly AgentMessage[],
+		maxBytes: number,
+	): Array<{ label: string; text: string }> {
+		const extracts: Array<{ label: string; text: string }> = [];
+		let remaining = Math.max(0, maxBytes);
+		for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+			const message = messages[i];
+			if (message.role !== "toolResult" || message.toolName !== "web_research" || message.isError) continue;
+			const details = message.details as { action?: string } | undefined;
+			if (details?.action === "search") continue;
+			const text = message.content
+				.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("\n")
+				.trim();
+			if (!text || !/(full content|Fetched web evidence|Deep research evidence dossier)/i.test(text)) continue;
+			const clamped = clampTextBytes(text, remaining);
+			if (!clamped) continue;
+			extracts.push({
+				label: `web_research:${details?.action ?? "evidence"}:${message.toolCallId}`,
+				text: clamped,
+			});
+			remaining -= Buffer.byteLength(clamped, "utf-8");
+		}
+		return extracts.reverse();
+	}
+
 	private async _prepareAxiomStreamingEvent(event: AgentEvent): Promise<AgentEvent | undefined> {
+		if (event.type === "message_discard" && event.message.role === "assistant") {
+			this._axiomStreamOutputGate = undefined;
+			this._axiomStreamValidator?.stop();
+			this._axiomStreamValidator = undefined;
+			return event;
+		}
 		if (event.type === "message_start" && event.message.role === "assistant") {
 			this._startStreamValidator();
 			return event;
@@ -1583,6 +1900,23 @@ export class AgentSession {
 		return this.agent.state.model;
 	}
 
+	private _formatModelContextBlock(): string {
+		const model = this.model;
+		if (!model) return "";
+		const providerLabel = model.provider === "openai-codex" ? "ChatGPT Codex" : model.provider;
+		const modelLabel = model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id;
+		const thinking = this.supportsThinking() ? this.thinkingLevel : "off";
+		return [
+			"<axiom_runtime_model>",
+			`Current provider: ${providerLabel}`,
+			`Current model: ${modelLabel}`,
+			`Model API: ${model.api}`,
+			`Reasoning effort: ${thinking}`,
+			"If the user asks what model you are using, answer with the Current provider and Current model above. Do not say the model identity is unavailable.",
+			"</axiom_runtime_model>",
+		].join("\n");
+	}
+
 	/** Current thinking level */
 	get thinkingLevel(): ThinkingLevel {
 		return this.agent.state.thinkingLevel;
@@ -1630,6 +1964,17 @@ export class AgentSession {
 
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
+	}
+
+	getToolPermissionMode(): ToolPermissionMode {
+		return this._toolPermissionMode;
+	}
+
+	setToolPermissionMode(mode: ToolPermissionMode): void {
+		if (!TOOL_PERMISSION_MODES.has(mode)) {
+			throw new Error(`Invalid tool permission mode: ${String(mode)}`);
+		}
+		this._toolPermissionMode = mode;
 	}
 
 	/**
@@ -2217,6 +2562,11 @@ export class AgentSession {
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 			}
 
+			const modelContextBlock = this._formatModelContextBlock();
+			if (modelContextBlock) {
+				this.agent.state.systemPrompt = `${this.agent.state.systemPrompt}\n\n${modelContextBlock}`;
+			}
+
 			// AXIOM: append per-task framing, strategy hints, and recalled lessons. This goes
 			// AFTER the extension hook so AXIOM context lives at the bottom of the system prompt
 			// (closest to the user message), and extensions can't accidentally strip it.
@@ -2243,6 +2593,13 @@ export class AgentSession {
 						this.agent.state.thinkingLevel = effective;
 					}
 				}
+			}
+			// Background goal (/goal): a persistent objective, appended at the very
+			// bottom of the system prompt (after AXIOM, closest to the user message) so
+			// it rides along on every prompt and continuation turn until cleared.
+			const goalBlock = formatBackgroundGoalBlock(this._backgroundGoal);
+			if (goalBlock) {
+				this.agent.state.systemPrompt = `${this.agent.state.systemPrompt}\n\n${goalBlock}`;
 			}
 		} catch (error) {
 			preflightResult?.(false);
@@ -3503,7 +3860,9 @@ export class AgentSession {
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
 			toolRegistry.set(tool.name, tool);
 		}
-		this._toolRegistry = toolRegistry;
+		this._toolRegistry = new Map(
+			Array.from(toolRegistry.entries()).map(([name, tool]) => [name, this._wrapToolWithPermissionGate(tool)]),
+		);
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
@@ -3576,7 +3935,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "rg", "find", "ls"];
+			: ["read", "bash", "edit", "write", "rg", "find", "ls", "web_research"];
 		const baseActiveToolNames = this._withAxiomManagedTools(options.activeToolNames ?? defaultActiveToolNames);
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -3607,6 +3966,54 @@ export class AgentSession {
 		}
 	}
 
+	private _wrapToolWithPermissionGate(tool: AgentTool): AgentTool {
+		if (!PERMISSION_APPROVAL_TOOL_NAMES.has(tool.name)) return tool;
+		return {
+			...tool,
+			execute: async (toolCallId, params, signal, onUpdate) => {
+				if (this._toolPermissionMode === "ask") {
+					const approved = await this._extensionUIContext?.confirm(
+						`Allow ${tool.name}?`,
+						this._formatToolApprovalMessage(tool.name, params),
+						{ signal },
+					);
+					if (!approved) {
+						throw new Error(`Permission denied for ${tool.name}.`);
+					}
+				}
+				return tool.execute(toolCallId, params, signal, onUpdate);
+			},
+		};
+	}
+
+	private _formatToolApprovalMessage(toolName: string, params: unknown): string {
+		const summary = this._summarizeToolPermissionParams(toolName, params);
+		return [
+			"AXIOM wants to run a permission-sensitive tool.",
+			`Tool: ${toolName}`,
+			summary ? `Target: ${summary}` : undefined,
+			"Approve only if this matches what you asked AXIOM to do.",
+		].filter(Boolean).join("\n");
+	}
+
+	private _summarizeToolPermissionParams(toolName: string, params: unknown): string {
+		if (!params || typeof params !== "object") return "";
+		const values = params as Record<string, unknown>;
+		const primary =
+			toolName === "bash"
+				? values.command
+				: values.path ?? values.file_path ?? values.filePath ?? values.target ?? values.command ?? values.code;
+		if (typeof primary === "string") {
+			return primary.length > 220 ? `${primary.slice(0, 217)}...` : primary;
+		}
+		try {
+			const json = JSON.stringify(values);
+			return json.length > 220 ? `${json.slice(0, 217)}...` : json;
+		} catch {
+			return "";
+		}
+	}
+
 	// =========================================================================
 	// Auto-Retry
 	// =========================================================================
@@ -3634,7 +4041,9 @@ export class AgentSession {
 	}
 
 	private _primaryModelId(): string {
-		return process.env.AXIOM_PRIMARY_MODEL || "gemma-4-31b-it";
+		// Default to gemini-2.5-flash: it's the model served on the free Gemini
+		// tier (3.5-flash 404s / is quota-starved there). Env always overrides.
+		return process.env.AXIOM_PRIMARY_MODEL || "gemini-2.5-flash";
 	}
 
 	private _fallbackProvider(): string {
@@ -3642,7 +4051,7 @@ export class AgentSession {
 	}
 
 	private _fallbackModelId(): string {
-		return process.env.AXIOM_FALLBACK_MODEL || "google/gemma-4-31b-it";
+		return process.env.AXIOM_FALLBACK_MODEL || "google/gemini-2.5-flash";
 	}
 
 	private _isPrimaryModel(model: Model<any> | undefined): boolean {
@@ -3743,7 +4152,14 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		// Honor a provider-supplied retry delay (free Gemini/Code Assist tiers
+		// return "reset after Ns" / retryDelay on 429). Exponential backoff from a
+		// small base is far too short for a per-minute rate limit, so the agent
+		// would burn all its retries inside the still-limited window and give up.
+		const providerDelayMs = extractRetryDelayMs(message.errorMessage);
+		const backoffMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		// Cap at 60s so a runaway "reset after huge N" can't wedge the UI forever.
+		const delayMs = Math.min(Math.max(providerDelayMs ?? 0, backoffMs), 60_000);
 
 		this._emit({
 			type: "auto_retry_start",
@@ -3922,6 +4338,21 @@ export class AgentSession {
 	setSessionName(name: string): void {
 		this.sessionManager.appendSessionInfo(name);
 		this._emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
+	}
+
+	/**
+	 * Set (or clear, with undefined) a persistent background goal. Once set, the goal
+	 * is folded into the bottom of the system prompt on every prompt and rides along
+	 * on each continuation turn, so the agent keeps pursuing it across multiple turns.
+	 */
+	setBackgroundGoal(goal: string | undefined): void {
+		const trimmed = goal?.trim();
+		this._backgroundGoal = trimmed ? trimmed : undefined;
+	}
+
+	/** The current persistent background goal, or undefined if none is set. */
+	getBackgroundGoal(): string | undefined {
+		return this._backgroundGoal;
 	}
 
 	// =========================================================================

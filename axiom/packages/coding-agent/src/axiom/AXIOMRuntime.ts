@@ -849,7 +849,7 @@ export class AXIOMRuntime {
 			sections.push("# AXIOM BenchmarkMode");
 			sections.push("");
 			sections.push(
-				"Gemma is the base model; AXIOM must supply benchmark discipline. Follow this protocol for coding/terminal-bench-style tasks.",
+				"A compact base model powers this agent; AXIOM must supply benchmark discipline. Follow this protocol for coding/terminal-bench-style tasks.",
 			);
 			sections.push("");
 			for (const directive of plan.benchmarkProtocol.directives) {

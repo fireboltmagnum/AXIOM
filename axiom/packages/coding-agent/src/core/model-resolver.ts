@@ -18,7 +18,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-5.5",
 	deepseek: "deepseek-v4-pro",
-	google: "gemma-4-31b-it",
+	google: "gemini-3.5-flash",
 	"google-vertex": "gemini-3.1-pro-preview",
 	"github-copilot": "gpt-5.4",
 	openrouter: "moonshotai/kimi-k2.6",
@@ -517,6 +517,30 @@ export async function findInitialModel(options: {
 		}
 		if (resolved.model) {
 			return { model: resolved.model, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		}
+	}
+
+	// 1.5. AXIOM primary model from env (AXIOM_PRIMARY_PROVIDER / AXIOM_PRIMARY_MODEL).
+	// This is the user's configured default and must beat stale saved settings —
+	// otherwise a previously-selected model (e.g. an nvidia-nim fallback) sticks
+	// even after the user points AXIOM at a different primary. It applies even
+	// when resuming a session: an env-configured primary is a deliberate global
+	// override, and a resumed session must not get pinned to a now-dead model
+	// (e.g. a quota-exhausted or free-tier-unavailable id baked in at creation).
+	// Falls through silently when the configured primary isn't in the registry
+	// or has no auth, so a valid session model still wins in that case.
+	{
+		const primaryProvider = process.env.AXIOM_PRIMARY_PROVIDER;
+		const primaryModelId = process.env.AXIOM_PRIMARY_MODEL;
+		if (primaryProvider && primaryModelId) {
+			const primary = modelRegistry.find(primaryProvider, primaryModelId);
+			if (primary && modelRegistry.hasConfiguredAuth(primary)) {
+				return {
+					model: primary,
+					thinkingLevel: defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+					fallbackMessage: undefined,
+				};
+			}
 		}
 	}
 

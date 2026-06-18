@@ -132,6 +132,13 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
+export interface PrepareFinalAnswerContext {
+	/** Draft no-tool assistant message that signaled the agent is ready to finish. */
+	draft: AssistantMessage;
+	/** Current loop context before the draft is persisted. */
+	context: AgentContext;
+}
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
@@ -215,6 +222,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	prepareNextTurn?: (
 		context: PrepareNextTurnContext,
 	) => AgentLoopTurnUpdate | undefined | Promise<AgentLoopTurnUpdate | undefined>;
+
+	/**
+	 * Called when an assistant response has no tool calls and would normally end the run.
+	 *
+	 * If messages are returned, the no-tool response is discarded as a draft, those
+	 * messages are injected, tools are disabled for one final provider call, and
+	 * that final call becomes the user-facing answer. This is used for deterministic
+	 * final gather/synthesis without making upstream retrieval heavier.
+	 */
+	prepareFinalAnswer?: (
+		context: PrepareFinalAnswerContext,
+	) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>;
 
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.
@@ -412,6 +431,8 @@ export type AgentEvent =
 	// Only emitted for assistant messages during streaming
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
+	// Emitted when a streamed assistant draft is deliberately discarded before persistence.
+	| { type: "message_discard"; message: AgentMessage; reason: "final_gather" }
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }

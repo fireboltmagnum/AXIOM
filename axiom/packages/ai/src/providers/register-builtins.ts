@@ -242,6 +242,26 @@ function loadGoogleProviderModule(): Promise<
 	return googleProviderModulePromise;
 }
 
+let googleCodeAssistProviderModulePromise:
+	| Promise<LazyProviderModule<"google-code-assist", GoogleOptions, SimpleStreamOptions>>
+	| undefined;
+
+function loadGoogleCodeAssistProviderModule(): Promise<
+	LazyProviderModule<"google-code-assist", GoogleOptions, SimpleStreamOptions>
+> {
+	googleCodeAssistProviderModulePromise ||= importNodeOnlyProvider("./google-code-assist.ts").then((module) => {
+		const provider = module as {
+			streamGoogleCodeAssist: StreamFunction<"google-code-assist", GoogleOptions>;
+			streamSimpleGoogleCodeAssist: StreamFunction<"google-code-assist", SimpleStreamOptions>;
+		};
+		return {
+			stream: provider.streamGoogleCodeAssist,
+			streamSimple: provider.streamSimpleGoogleCodeAssist,
+		};
+	});
+	return googleCodeAssistProviderModulePromise;
+}
+
 function loadGoogleVertexProviderModule(): Promise<
 	LazyProviderModule<"google-vertex", GoogleVertexOptions, SimpleStreamOptions>
 > {
@@ -331,6 +351,8 @@ export const streamGoogle = createLazyStream(loadGoogleProviderModule);
 export const streamSimpleGoogle = createLazySimpleStream(loadGoogleProviderModule);
 export const streamGoogleVertex = createLazyStream(loadGoogleVertexProviderModule);
 export const streamSimpleGoogleVertex = createLazySimpleStream(loadGoogleVertexProviderModule);
+export const streamGoogleCodeAssist = createLazyStream(loadGoogleCodeAssistProviderModule);
+export const streamSimpleGoogleCodeAssist = createLazySimpleStream(loadGoogleCodeAssistProviderModule);
 export const streamMistral = createLazyStream(loadMistralProviderModule);
 export const streamSimpleMistral = createLazySimpleStream(loadMistralProviderModule);
 export const streamOpenAICodexResponses = createLazyStream(loadOpenAICodexResponsesProviderModule);
@@ -389,6 +411,12 @@ export function registerBuiltInApiProviders(): void {
 		api: "google-vertex",
 		stream: streamGoogleVertex,
 		streamSimple: streamSimpleGoogleVertex,
+	});
+
+	registerApiProvider({
+		api: "google-code-assist",
+		stream: streamGoogleCodeAssist,
+		streamSimple: streamSimpleGoogleCodeAssist,
 	});
 
 	registerApiProvider({

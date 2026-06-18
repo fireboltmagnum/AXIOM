@@ -1405,6 +1405,54 @@ async function generateModels() {
 		}
 	}
 
+	// Keep compatibility models used by provider normalization tests even after
+	// upstream catalogs mark them deprecated and remove them from discovery.
+	if (!allModels.some((model) => model.provider === "github-copilot" && model.id === "gpt-4o")) {
+		allModels.push({
+			id: "gpt-4o",
+			name: "GPT-4o",
+			api: "openai-completions",
+			provider: "github-copilot",
+			baseUrl: "https://api.individual.githubcopilot.com",
+			headers: { ...COPILOT_STATIC_HEADERS },
+			compat: {
+				supportsStore: false,
+				supportsDeveloperRole: false,
+				supportsReasoningEffort: false,
+			},
+			reasoning: false,
+			input: ["text", "image"],
+			cost: {
+				input: 2.5,
+				output: 10,
+				cacheRead: 1.25,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 16384,
+		});
+	}
+
+	if (!allModels.some((model) => model.provider === "openrouter" && model.id === "google/gemini-2.0-flash-001")) {
+		allModels.push({
+			id: "google/gemini-2.0-flash-001",
+			name: "Google: Gemini 2.0 Flash",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: false,
+			input: ["text", "image"],
+			cost: {
+				input: 0.1,
+				output: 0.4,
+				cacheRead: 0.025,
+				cacheWrite: 0,
+			},
+			contextWindow: 1048576,
+			maxTokens: 8192,
+		});
+	}
+
 	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.4")) {
 		allModels.push({
 			id: "gpt-5.4",

@@ -2,17 +2,16 @@
  * Optional local embedder for SparseTreeGrep semantic recall.
  *
  * Wraps `@xenova/transformers` (ONNX Runtime in Node, no native deps) to
- * compute dense vectors for chunks and queries. The dep is **NOT** declared
- * in package.json — it's dynamic-imported so the AXIOM install stays slim
- * for users who don't want a 40-100MB model + onnxruntime in their tree.
+ * compute dense vectors for chunks and queries. The dep is declared in
+ * package.json as an **optionalDependency** and dynamic-imported here, so the
+ * AXIOM install stays resilient for users on platforms where the onnxruntime
+ * prebuilt is unavailable (the install skips it instead of failing).
  *
- * Opt-in path:
- *
- *     npm i @xenova/transformers
- *
- * After install, the next AXIOM run that hits {@link getEmbedder} will lazily
- * load the configured model. First call downloads + caches the model into
- * `~/.cache/huggingface/`. Subsequent runs reuse the cached weights.
+ * The first AXIOM run that hits {@link getEmbedder} lazily loads the configured
+ * model. First call downloads + caches the model into `~/.cache/huggingface/`.
+ * Subsequent runs reuse the cached weights. If the optional dep was skipped at
+ * install time, getEmbedder() resolves to undefined and search falls back to
+ * pure TF-IDF.
  *
  * If `@xenova/transformers` is not installed, every getEmbedder() call
  * resolves to `undefined` and SparseTreeGrep falls back to pure TF-IDF — no
@@ -48,13 +47,15 @@ export async function getEmbedder(): Promise<Embedder | undefined> {
 	if (loadAttempted) return cachedEmbedder;
 	loadAttempted = true;
 	try {
-		// Dynamic import: package may not be installed. The unusual `Function`
-		// indirection prevents bundlers / tsc from trying to resolve the
-		// module at build time — purely a runtime opt-in.
-		const dynImport = new Function("specifier", "return import(specifier)") as (
-			specifier: string,
-		) => Promise<unknown>;
-		const lib = (await dynImport("@xenova/transformers")) as {
+		// Dynamic import via a non-literal specifier. The package is an
+		// optionalDependency, so it may be absent where the onnxruntime
+		// prebuild was skipped. The indirect specifier keeps tsc from resolving
+		// the (untyped) module at build time, while a real `import()` resolves
+		// correctly under both node and the jiti runtime the CLI uses — a
+		// `new Function`-wrapped import escapes jiti's module resolver and
+		// silently fails to load the model.
+		const specifier = "@xenova/transformers";
+		const lib = (await import(/* @vite-ignore */ specifier)) as {
 			pipeline: (task: string, model: string, opts?: unknown) => Promise<XenovaPipeline>;
 			env?: { allowLocalModels?: boolean; cacheDir?: string };
 		};

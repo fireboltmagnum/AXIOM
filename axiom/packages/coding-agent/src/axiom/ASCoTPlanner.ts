@@ -101,6 +101,11 @@ function pickStrategyHints(
 				"Use flow_graph for behavior questions: execution paths, data flow, effects, events, errors, failed tests, or command traces.",
 			);
 		}
+		if (tools.has("benchmark_test")) {
+			hints.push(
+				"Use benchmark_test when the task asks about AXIOM benchmarks, benchmark adapters, or health checks for AXIOM-native tools; never claim an external benchmark score unless its harness actually ran.",
+			);
+		}
 	}
 
 	if (recallCount > 0) {

@@ -1,3 +1,4 @@
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@axiom/agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@axiom/ai";
@@ -276,7 +277,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write", "rg", "find", "ls", "todo_list"];
+	const defaultActiveToolNames: ToolName[] = [
+		"read",
+		"bash",
+		"edit",
+		"write",
+		"rg",
+		"find",
+		"ls",
+		"todo_list",
+		"gather_context",
+		"execute_code",
+		"memory",
+		"web_research",
+	];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const initialActiveToolNames: string[] = options.tools
 		? [...options.tools]
@@ -334,6 +348,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			// TEMP DIAGNOSTIC (Phase 1): dump the EXACT model input per call when
+			// AXIOM_DUMP_SYNTHESIS is set, so a "thin output" run can be inspected
+			// to see whether the final synthesis call holds full content or only
+			// descriptions/snippets. Off by default — zero impact on normal runs.
+			if (process.env.AXIOM_DUMP_SYNTHESIS) {
+				try {
+					dumpSynthesisInput(cwd, model, context);
+				} catch {
+					// diagnostics must never break a run
+				}
+			}
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
 				throw new Error(auth.error);
@@ -419,4 +444,90 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionsResult,
 		modelFallbackMessage,
 	};
+}
+
+/**
+ * TEMP DIAGNOSTIC (Phase 1 investigation, not a product feature).
+ *
+ * Dumps the exact provider input for one model call to
+ * `<cwd>/.axiom/synthesis-dumps/`: a `.json` with the full token-for-token
+ * `context`, and a human-scannable `.txt` summary (per-message role/type/size +
+ * preview, and a heuristic split of how many chars look like full file/source
+ * CONTENT vs SparseTreeGrep search/describe SUMMARIES). Also appends one line
+ * per call to `index.log` so the LAST line = the final synthesis call.
+ *
+ * Activated only when AXIOM_DUMP_SYNTHESIS is set. Remove after diagnosis.
+ */
+function dumpSynthesisInput(
+	cwd: string,
+	model: Model<string>,
+	context: { systemPrompt?: string; messages: readonly Message[] },
+): void {
+	const dir = join(cwd, ".axiom", "synthesis-dumps");
+	mkdirSync(dir, { recursive: true });
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	const base = join(dir, `call-${stamp}`);
+
+	const textOf = (content: unknown): string => {
+		if (typeof content === "string") return content;
+		if (Array.isArray(content)) {
+			return content
+				.map((part) => {
+					if (typeof part === "string") return part;
+					if (part && typeof part === "object") {
+						const p = part as { type?: string; text?: string; content?: unknown };
+						if (typeof p.text === "string") return p.text;
+						if (p.content !== undefined) return textOf(p.content);
+						return `[${p.type ?? "part"}]`;
+					}
+					return "";
+				})
+				.join("\n");
+		}
+		return content === undefined ? "" : String(content);
+	};
+
+	const SUMMARY_MARKERS = [
+		"chunkSummary",
+		"SparseTreeGrep",
+		"BugLens",
+		"Evidence Pack",
+		"query focus",
+		"matched:",
+		"descriptions:",
+	];
+	let contentChars = 0;
+	let summaryChars = 0;
+	const lines: string[] = [];
+	let totalChars = 0;
+	const classify = (label: string, text: string) => {
+		totalChars += text.length;
+		const looksLikeSummary = SUMMARY_MARKERS.some((m) => text.includes(m));
+		if (looksLikeSummary) summaryChars += text.length;
+		else contentChars += text.length;
+		const preview = text.replace(/\s+/g, " ").slice(0, 160);
+		lines.push(`${label} chars=${text.length}${looksLikeSummary ? " [SUMMARY-like]" : ""}\n    ${preview}`);
+	};
+	// The system prompt (holding AXIOM's lean brief / evidence pack) is part of
+	// what the model sees at synthesis — count it as message #-1.
+	classify("#sys role=system", context.systemPrompt ?? "");
+	context.messages.forEach((message, i) => {
+		const role = (message as { role?: string }).role ?? "?";
+		classify(`#${i} role=${role}`, textOf((message as { content?: unknown }).content));
+	});
+
+	const estTokens = Math.round(totalChars / 4);
+	const header = [
+		`synthesis-call dump @ ${stamp}`,
+		`model=${model.provider}/${model.id}  messages=${context.messages.length}  chars=${totalChars}  ~tokens=${estTokens}`,
+		`heuristic: content-like=${contentChars} chars  summary-like=${summaryChars} chars`,
+		"",
+	].join("\n");
+
+	writeFileSync(`${base}.json`, JSON.stringify(context, null, 2));
+	writeFileSync(`${base}.txt`, header + lines.join("\n\n"));
+	appendFileSync(
+		join(dir, "index.log"),
+		`${stamp}  messages=${context.messages.length}  ~tokens=${estTokens}  content-like=${contentChars}  summary-like=${summaryChars}\n`,
+	);
 }

@@ -7,9 +7,10 @@
 
 import type { AgentMessage, ThinkingLevel } from "@axiom/agent-core";
 import type { ImageContent, Model } from "@axiom/ai";
-import type { SessionStats } from "../../core/agent-session.ts";
+import type { SessionStats, ToolPermissionMode } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { SessionInfo } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
 // ============================================================================
@@ -19,6 +20,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 export type RpcCommand =
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
+	| { id?: string; type: "run_slash_command"; command: string }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort" }
@@ -26,6 +28,10 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_active_tools" }
+	| { id?: string; type: "get_all_tools" }
+	| { id?: string; type: "set_active_tools"; toolNames: string[] }
+	| { id?: string; type: "set_tool_permission_mode"; mode: ToolPermissionMode }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -61,6 +67,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_fork_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "set_session_name"; name: string }
+	| { id?: string; type: "list_sessions"; all?: boolean }
+	| { id?: string; type: "get_history" }
 
 	// Messages
 	| { id?: string; type: "get_messages" }
@@ -79,7 +87,7 @@ export interface RpcSlashCommand {
 	/** Human-readable description */
 	description?: string;
 	/** What kind of command this is */
-	source: "extension" | "prompt" | "skill";
+	source: "builtin" | "extension" | "prompt" | "skill";
 	/** Source metadata for the owning resource */
 	sourceInfo: SourceInfo;
 }
@@ -91,6 +99,7 @@ export interface RpcSlashCommand {
 export interface RpcSessionState {
 	model?: Model<any>;
 	thinkingLevel: ThinkingLevel;
+	backgroundGoal?: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
@@ -111,6 +120,7 @@ export interface RpcSessionState {
 export type RpcResponse =
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
+	| { id?: string; type: "response"; command: "run_slash_command"; success: true; data: { message: string } }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
 	| { id?: string; type: "response"; command: "abort"; success: true }
@@ -118,6 +128,10 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "get_active_tools"; success: true; data: { toolNames: string[] } }
+	| { id?: string; type: "response"; command: "get_all_tools"; success: true; data: { toolNames: string[] } }
+	| { id?: string; type: "response"; command: "set_active_tools"; success: true; data: { toolNames: string[] } }
+	| { id?: string; type: "response"; command: "set_tool_permission_mode"; success: true; data: { mode: ToolPermissionMode } }
 
 	// Model
 	| {
@@ -189,6 +203,20 @@ export type RpcResponse =
 			data: { text: string | null };
 	  }
 	| { id?: string; type: "response"; command: "set_session_name"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_sessions";
+			success: true;
+			data: { sessions: Array<Omit<SessionInfo, "created" | "modified"> & { created: string; modified: string }> };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_history";
+			success: true;
+			data: { messages: Array<{ role: "user" | "assistant"; content: unknown; time: string }> };
+	  }
 
 	// Messages
 	| { id?: string; type: "response"; command: "get_messages"; success: true; data: { messages: AgentMessage[] } }
@@ -212,6 +240,14 @@ export type RpcResponse =
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "multiSelect";
+			title: string;
+			options: string[];
+			timeout?: number;
+	  }
 	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
 	| {
 			type: "extension_ui_request";
@@ -245,7 +281,19 @@ export type RpcExtensionUIRequest =
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
-	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "host_call";
+			/** Host capability namespace, e.g. "space". */
+			channel: string;
+			/** Operation within the channel, e.g. "draw" | "snapshot". */
+			op: string;
+			/** Arbitrary JSON payload for the operation. */
+			payload: unknown;
+			timeout?: number;
+	  };
 
 // ============================================================================
 // Extension UI Commands (stdin)
@@ -254,8 +302,11 @@ export type RpcExtensionUIRequest =
 /** Response to an extension UI request */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
+	| { type: "extension_ui_response"; id: string; values: string[] }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; cancelled: true };
+	| { type: "extension_ui_response"; id: string; cancelled: true }
+	/** Result of a host_call: arbitrary JSON `result`, or an `error` string. */
+	| { type: "extension_ui_response"; id: string; result?: unknown; error?: string };
 
 // ============================================================================
 // Helper type for extracting command types

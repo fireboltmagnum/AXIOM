@@ -1,0 +1,6 @@
+node_modules
+dist
+release
+*.log
+src-tauri/target
+src-tauri/gen/schemas

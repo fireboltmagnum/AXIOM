@@ -52,6 +52,9 @@ export interface SparseTreeGrepToolDetails {
 	documentId?: string;
 	chunkCount?: number;
 	nodeCount?: number;
+	hits?: Array<
+		Pick<AxiomSparseTreeGrepHit, "documentId" | "documentName" | "chunkId" | "page" | "byteStart" | "byteEnd">
+	>;
 	/** Set when index-time embeddings were computed (optional @xenova dep). */
 	embedderModel?: string;
 }
@@ -143,6 +146,7 @@ export function createSparseTreeGrepToolDefinition(
 				return result(action, text, {
 					documentId: params.documentId,
 					chunkCount: hits.length,
+					hits: hits.map(toSparseTreeGrepToolHit),
 				});
 			}
 			if (action === "describe") {
@@ -158,6 +162,7 @@ export function createSparseTreeGrepToolDefinition(
 				return result(action, formatDescribe(described.descriptions), {
 					documentId: described.index.documentId,
 					chunkCount: described.descriptions.length,
+					hits: described.descriptions.map(({ hit }) => toSparseTreeGrepToolHit(hit)),
 				});
 			}
 			if (action === "expand") {
@@ -166,6 +171,7 @@ export function createSparseTreeGrepToolDefinition(
 					documentId: expanded.index.documentId,
 					chunkCount: expanded.occurrences.length,
 					nodeCount: expanded.nodes.length,
+					hits: expanded.occurrences.map(toSparseTreeGrepToolHit),
 				});
 			}
 			if (action === "extract") {
@@ -177,6 +183,7 @@ export function createSparseTreeGrepToolDefinition(
 				return result(action, formatExtract(exact.hit, exact.text), {
 					documentId: exact.hit.documentId,
 					chunkCount: 1,
+					hits: [toSparseTreeGrepToolHit(exact.hit)],
 				});
 			}
 			const stats = store.stats();
@@ -211,6 +218,19 @@ function result(
 	return {
 		content: [{ type: "text" as const, text }],
 		details: { action, ...details },
+	};
+}
+
+function toSparseTreeGrepToolHit(
+	hit: AxiomSparseTreeGrepHit,
+): Pick<AxiomSparseTreeGrepHit, "documentId" | "documentName" | "chunkId" | "page" | "byteStart" | "byteEnd"> {
+	return {
+		documentId: hit.documentId,
+		documentName: hit.documentName,
+		chunkId: hit.chunkId,
+		page: hit.page,
+		byteStart: hit.byteStart,
+		byteEnd: hit.byteEnd,
 	};
 }
 
