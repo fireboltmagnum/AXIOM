@@ -222,6 +222,33 @@
   @keyframes blink { 50% { opacity: 0; } }
   @media (max-width: 620px) { .applayout { grid-template-columns: 1fr; } .sidebar { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); } .sidebar .new, .sidebar .sp { display: none; } }
 
+  /* ---------- Space canvas demo ---------- */
+  .paneholder { position: relative; }
+  .spacepane {
+    position: relative; min-height: 320px; padding: 18px;
+    background:
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0) 0 0 / 22px 22px;
+  }
+  .spacepane[hidden] { display: none; }
+  #spacesvg { width: 100%; height: 248px; display: block; }
+  .sb-rect { fill: rgba(255,255,255,0.03); stroke: var(--coral); stroke-width: 1.5; rx: 9; }
+  .sb-rect.alt { stroke: var(--coral-soft); }
+  .sb-rect.dim { stroke: var(--muted-dim); }
+  .sb-label { fill: var(--text); font-size: 13px; font-family: -apple-system, "Segoe UI", sans-serif; text-anchor: middle; dominant-baseline: middle; }
+  .sb-node { opacity: 0; transform: scale(.85); transform-origin: center; transform-box: fill-box; animation: nodepop .45s var(--ease) forwards; }
+  @keyframes nodepop { to { opacity: 1; transform: scale(1); } }
+  .sb-edge { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 240; stroke-dashoffset: 240; animation: draw .5s var(--ease) forwards; }
+  .sb-arrow { fill: var(--muted); opacity: 0; animation: msgIn .3s var(--ease) forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .space-prompt {
+    position: absolute; left: 18px; right: 18px; bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13.5px; color: var(--muted);
+    background: rgba(15,14,13,0.92); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px);
+  }
+  .space-prompt .pin { color: var(--coral-soft); }
+
   /* ---------- Features ---------- */
   .feat-head { text-align: center; margin-bottom: 56px; }
   .feat-head h2 { font-size: clamp(28px, 4.5vw, 44px); letter-spacing: -0.02em; font-weight: 800; }
@@ -320,21 +347,27 @@
           <div class="titlebar">
             <span class="d r"></span><span class="d y"></span><span class="d g"></span>
             <div class="tabs">
-              <span class="tab active">Chat</span>
-              <span class="tab">Space</span>
+              <span class="tab active" data-tab="chat">Chat</span>
+              <span class="tab" data-tab="space">Space</span>
             </div>
             <span class="wname">~/my-project</span>
           </div>
           <div class="applayout">
             <div class="sidebar">
-              <div class="si active"><span class="g">◆</span> Chat</div>
-              <div class="si"><span class="g">▦</span> Space</div>
+              <div class="si active" data-tab="chat"><span class="g">◆</span> Chat</div>
+              <div class="si" data-tab="space"><span class="g">▦</span> Space</div>
               <div class="si"><span class="g">▤</span> Dashboard</div>
               <div class="si"><span class="g">‹›</span> IDE</div>
               <div class="sp"></div>
               <div class="new">+ New session</div>
             </div>
-            <div class="chatpane" id="chatpane"></div>
+            <div class="paneholder">
+              <div class="chatpane" id="chatpane"></div>
+              <div class="spacepane" id="spacepane" hidden>
+                <svg id="spacesvg" viewBox="0 0 520 300" preserveAspectRatio="xMidYMid meet"></svg>
+                <div class="space-prompt" id="spaceprompt"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -456,13 +489,78 @@
     await wait(300);
     const reply = el("bubble"); a.appendChild(reply);
     await new Promise((res) => typeInto(reply, AGENT_REPLY, 16, res));
-    await wait(3200);
-    runChat(); // loop
+    await wait(2600);
+  }
+
+  /* ---------- Space canvas animation (diagram draws itself) ---------- */
+  const spacePane = document.getElementById("spacepane");
+  const chatPane = pane; // same #chatpane element
+  const svg = document.getElementById("spacesvg");
+  const spacePrompt = document.getElementById("spaceprompt");
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const SPACE_MSG = "Diagram the request flow for the new API";
+  // box layout on a 520×300 board: [id, x, y, w, label, variant]
+  const BOXES = [
+    ["client", 200, 14, 120, "Client", ""],
+    ["gw",     200, 88, 120, "API Gateway", ""],
+    ["rl",      52, 162, 130, "Rate Limiter", "alt"],
+    ["svc",    214, 162, 120, "Service", ""],
+    ["db",     214, 236, 120, "Database", "dim"],
+  ];
+  const EDGES = [["client","gw"],["gw","rl"],["gw","svc"],["svc","db"]];
+  const BH = 46;
+  const center = (b) => ({ x: b[1] + b[3] / 2, y: b[2] + BH / 2 });
+  const byId = (id) => BOXES.find((b) => b[0] === id);
+
+  function mk(tag, attrs) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+  async function runSpace() {
+    svg.innerHTML = "";
+    spacePrompt.innerHTML = "";
+    await new Promise((res) => typeInto(spacePrompt, "▸ " + SPACE_MSG, 26, res));
+    await wait(500);
+    // edges first (drawn behind boxes), revealed progressively with the boxes
+    const drawn = new Set();
+    for (let i = 0; i < BOXES.length; i++) {
+      const b = BOXES[i];
+      // draw any edge whose both ends are now present
+      const g = mk("g", { class: "sb-node" });
+      g.appendChild(mk("rect", { x: b[1], y: b[2], width: b[3], height: BH, rx: 9, class: "sb-rect " + (b[5] || "") }));
+      const tx = mk("text", { x: b[1] + b[3] / 2, y: b[2] + BH / 2, class: "sb-label" });
+      tx.textContent = b[4];
+      g.appendChild(tx);
+      svg.appendChild(g);
+      drawn.add(b[0]);
+      EDGES.forEach(([a, c]) => {
+        const key = a + c;
+        if (drawn.has(a) && drawn.has(c) && !drawn.has(key)) {
+          drawn.add(key);
+          const p1 = center(byId(a)), p2 = center(byId(c));
+          const line = mk("path", { class: "sb-edge", d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}` });
+          svg.insertBefore(line, svg.firstChild); // behind boxes
+        }
+      });
+      await wait(520);
+    }
+    await wait(2800);
+  }
+
+  /* ---------- demo controller: loop Chat → Space ---------- */
+  function setTab(name) {
+    document.querySelectorAll('[data-tab]').forEach((n) => n.classList.toggle("active", n.dataset.tab === name));
+    chatPane.hidden = name !== "chat";
+    spacePane.hidden = name !== "space";
+  }
+  async function demoLoop() {
+    while (true) {
+      setTab("chat"); await runChat();
+      setTab("space"); await runSpace();
+    }
   }
   const paneObs = new IntersectionObserver((es) => {
-    es.forEach((e) => { if (e.isIntersecting) { runChat(); paneObs.disconnect(); } });
-  }, { threshold: 0.35 });
-  paneObs.observe(pane);
+    es.forEach((e) => { if (e.isIntersecting) { demoLoop(); paneObs.disconnect(); } });
+  }, { threshold: 0.3 });
+  paneObs.observe(document.querySelector(".appwin"));
 
   /* ---------- scroll-reveal feature cards + cursor glow ---------- */
   const cardObs = new IntersectionObserver((es) => {
