@@ -169,27 +169,58 @@
   .chip[data-state="soon"] { opacity: .55; }
   .chip .tag { font-size: 11px; color: var(--muted-dim); }
 
-  /* ---------- Terminal mock ---------- */
-  .stage { margin: 60px auto 0; max-width: 760px; animation: rise 1.1s var(--ease) 1s both; }
-  .terminal {
-    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-    background: linear-gradient(180deg, rgba(20,18,17,0.92), rgba(14,13,12,0.92));
-    box-shadow: 0 40px 120px -40px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.02);
+  /* ---------- App window mockup ---------- */
+  .stage { margin: 64px auto 0; max-width: 880px; animation: rise 1.1s var(--ease) 1s both; }
+  .appwin {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(22,20,19,0.96), rgba(15,14,13,0.96));
+    box-shadow: 0 50px 130px -40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.02);
     backdrop-filter: blur(8px);
-    transform: perspective(1400px) rotateX(6deg); transform-origin: center top;
-    transition: transform .4s var(--ease);
+    transform: perspective(1600px) rotateX(5deg); transform-origin: center top;
+    transition: transform .5s var(--ease);
   }
-  .terminal:hover { transform: perspective(1400px) rotateX(0deg); }
-  .term-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
-  .term-bar .d { width: 11px; height: 11px; border-radius: 50%; }
-  .term-bar .d.r { background: #ff5f57; } .term-bar .d.y { background: #febc2e; } .term-bar .d.g { background: #28c840; }
-  .term-bar .t { margin-left: auto; font-size: 12px; color: var(--muted-dim); }
-  .term-body { padding: 22px 24px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; line-height: 1.85; text-align: left; min-height: 250px; }
-  .ln { white-space: pre-wrap; }
-  .ln .p { color: var(--coral); } .ln .u { color: var(--text); } .ln .c { color: var(--muted); }
-  .ln .ok { color: var(--green); } .ln .tool { color: var(--coral-soft); }
-  .cursor { display: inline-block; width: 9px; height: 17px; background: var(--coral); vertical-align: -3px; margin-left: 2px; animation: blink 1s steps(2) infinite; }
+  .appwin:hover { transform: perspective(1600px) rotateX(0deg); }
+  .titlebar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .titlebar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .titlebar .d.r { background: #ff5f57; } .titlebar .d.y { background: #febc2e; } .titlebar .d.g { background: #28c840; }
+  .titlebar .tabs { display: flex; gap: 4px; margin-left: 18px; }
+  .titlebar .tab { font-size: 12.5px; color: var(--muted-dim); padding: 5px 12px; border-radius: 7px; transition: all .3s; }
+  .titlebar .tab.active { color: var(--text); background: rgba(255,255,255,0.06); }
+  .titlebar .wname { margin-left: auto; font-size: 12px; color: var(--muted-dim); }
+
+  .applayout { display: grid; grid-template-columns: 168px 1fr; min-height: 320px; }
+  .sidebar { border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .sidebar .si {
+    display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted);
+    padding: 9px 11px; border-radius: 9px; transition: all .3s; cursor: default;
+  }
+  .sidebar .si .g { width: 16px; text-align: center; opacity: .85; }
+  .sidebar .si.active { color: var(--text); background: rgba(255,107,92,0.1); box-shadow: inset 2px 0 0 var(--coral); }
+  .sidebar .sp { flex: 1; }
+  .sidebar .new { font-size: 12px; color: var(--coral-soft); padding: 9px 11px; border: 1px dashed rgba(255,107,92,0.3); border-radius: 9px; text-align: center; }
+
+  .chatpane { padding: 22px 24px; text-align: left; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .msg { opacity: 0; transform: translateY(10px); animation: msgIn .5s var(--ease) forwards; }
+  @keyframes msgIn { to { opacity: 1; transform: none; } }
+  .msg .who { font-size: 11.5px; letter-spacing: .04em; color: var(--muted-dim); margin-bottom: 5px; text-transform: uppercase; }
+  .msg.user .bubble { color: var(--text); font-size: 15px; }
+  .msg.agent .bubble { color: var(--text); font-size: 14.5px; line-height: 1.6; }
+  .tooltrace { display: flex; flex-direction: column; gap: 7px; margin: 4px 0; }
+  .trace {
+    display: inline-flex; align-items: center; gap: 9px; align-self: flex-start;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px; color: var(--muted);
+    opacity: 0; transform: translateX(-8px); animation: msgIn .4s var(--ease) forwards;
+  }
+  .trace .verb { color: var(--coral-soft); } .trace .file { color: var(--text); } .trace .ok { color: var(--green); margin-left: 2px; }
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: tdot 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes tdot { 0%,60%,100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: var(--coral); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
+  @media (max-width: 620px) { .applayout { grid-template-columns: 1fr; } .sidebar { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); } .sidebar .new, .sidebar .sp { display: none; } }
 
   /* ---------- Features ---------- */
   .feat-head { text-align: center; margin-bottom: 56px; }
@@ -285,12 +316,26 @@
 
       <!-- live agent terminal -->
       <div class="stage">
-        <div class="terminal">
-          <div class="term-bar">
+        <div class="appwin">
+          <div class="titlebar">
             <span class="d r"></span><span class="d y"></span><span class="d g"></span>
-            <span class="t">axiom — agent session</span>
+            <div class="tabs">
+              <span class="tab active">Chat</span>
+              <span class="tab">Space</span>
+            </div>
+            <span class="wname">~/my-project</span>
           </div>
-          <div class="term-body" id="term"></div>
+          <div class="applayout">
+            <div class="sidebar">
+              <div class="si active"><span class="g">◆</span> Chat</div>
+              <div class="si"><span class="g">▦</span> Space</div>
+              <div class="si"><span class="g">▤</span> Dashboard</div>
+              <div class="si"><span class="g">‹›</span> IDE</div>
+              <div class="sp"></div>
+              <div class="new">+ New session</div>
+            </div>
+            <div class="chatpane" id="chatpane"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -365,47 +410,59 @@
       .join(" ");
   });
 
-  /* ---------- terminal typing animation ---------- */
-  const TERM = [
-    { html: `<span class="p">axiom</span> <span class="u">›</span> <span class="u">refactor the auth flow and add tests</span>`, type: true },
-    { html: `<span class="c">  → reading</span> <span class="tool">src/auth/session.ts</span>`, delay: 500 },
-    { html: `<span class="c">  → editing</span> <span class="tool">3 files</span> <span class="ok">✓</span>`, delay: 600 },
-    { html: `<span class="c">  → running</span> <span class="tool">npm test</span>`, delay: 600 },
-    { html: `<span class="ok">  ✓ 24 passing</span> <span class="c">· done in 2.1s</span>`, delay: 800 },
-    { html: `<span class="p">axiom</span> <span class="u">›</span> <span class="cursor"></span>`, delay: 500, last: true },
+  /* ---------- in-app chat animation (the REAL desktop app, not a terminal) ---------- */
+  const pane = document.getElementById("chatpane");
+  const USER_MSG = "Add rate limiting to the API and write tests for it";
+  const TRACES = [
+    `<span class="verb">read</span> <span class="file">src/server/api.ts</span>`,
+    `<span class="verb">edit</span> <span class="file">src/server/middleware/rateLimit.ts</span> <span class="ok">✓</span>`,
+    `<span class="verb">edit</span> <span class="file">src/server/api.ts</span> <span class="ok">✓</span>`,
+    `<span class="verb">write</span> <span class="file">test/rateLimit.test.ts</span> <span class="ok">✓</span>`,
+    `<span class="verb">bash</span> <span class="file">npm test</span> <span class="ok">✓ 31 passing</span>`,
   ];
-  const term = document.getElementById("term");
-  function typeLine(el, text, done) {
+  const AGENT_REPLY = "Done. Added a token-bucket limiter (100 req/min), wired it into the API, and the new tests all pass.";
+
+  function el(cls, html) { const d = document.createElement("div"); d.className = cls; if (html != null) d.innerHTML = html; return d; }
+  function typeInto(node, text, speed, done) {
     let i = 0;
-    const raw = text.replace(/<[^>]+>/g, "");
     (function step() {
-      el.innerHTML = `<span class="p">axiom</span> <span class="u">›</span> <span class="u">${raw.slice(raw.indexOf("›") > -1 ? 0 : 0, i)}</span>`;
-      // simpler: just reveal the user portion char by char
-      const userText = "refactor the auth flow and add tests";
-      el.innerHTML = `<span class="p">axiom</span> <span class="u">›</span> <span class="u">${userText.slice(0, i)}</span><span class="cursor"></span>`;
-      if (i++ < userText.length) setTimeout(step, 34);
-      else { el.innerHTML = text; done && done(); }
+      node.innerHTML = text.slice(0, i) + '<span class="cursor"></span>';
+      if (i++ < text.length) setTimeout(step, speed);
+      else { node.innerHTML = text; done && done(); }
     })();
   }
-  function runTerm() {
-    term.innerHTML = "";
-    let idx = 0;
-    function next() {
-      if (idx >= TERM.length) { setTimeout(() => runTerm(), 3500); return; }
-      const item = TERM[idx++];
-      const div = document.createElement("div");
-      div.className = "ln";
-      term.appendChild(div);
-      if (item.type) typeLine(div, item.html, () => setTimeout(next, 350));
-      else { div.innerHTML = item.html; setTimeout(next, item.delay || 400); }
+  function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  async function runChat() {
+    pane.innerHTML = "";
+    // user message, typed out
+    const u = el("msg user"); u.appendChild(el("who", "You"));
+    const ub = el("bubble"); u.appendChild(ub); pane.appendChild(u);
+    await new Promise((res) => typeInto(ub, USER_MSG, 28, res));
+    await wait(450);
+
+    // agent block: thinking dots → tool traces → reply
+    const a = el("msg agent"); a.appendChild(el("who", "AXIOM"));
+    const think = el("bubble", `<span class="typing"><i></i><i></i><i></i></span>`);
+    a.appendChild(think); pane.appendChild(a);
+    await wait(900);
+
+    const traceWrap = el("tooltrace"); think.replaceWith(traceWrap);
+    for (let k = 0; k < TRACES.length; k++) {
+      const t = el("trace", TRACES[k]); t.style.animationDelay = "0s";
+      traceWrap.appendChild(t);
+      await wait(560);
     }
-    next();
+    await wait(300);
+    const reply = el("bubble"); a.appendChild(reply);
+    await new Promise((res) => typeInto(reply, AGENT_REPLY, 16, res));
+    await wait(3200);
+    runChat(); // loop
   }
-  // start when terminal scrolls into view
-  const termObs = new IntersectionObserver((es) => {
-    es.forEach((e) => { if (e.isIntersecting) { runTerm(); termObs.disconnect(); } });
-  }, { threshold: 0.4 });
-  termObs.observe(term);
+  const paneObs = new IntersectionObserver((es) => {
+    es.forEach((e) => { if (e.isIntersecting) { runChat(); paneObs.disconnect(); } });
+  }, { threshold: 0.35 });
+  paneObs.observe(pane);
 
   /* ---------- scroll-reveal feature cards + cursor glow ---------- */
   const cardObs = new IntersectionObserver((es) => {
