@@ -4,243 +4,473 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AXIOM — free, genuinely-good agentic coding</title>
-<meta name="description" content="AXIOM is a free agentic coding assistant. Download for macOS, Windows, or Linux." />
+<meta name="description" content="A real coding agent — read, write, edit, run — built to be excellent on free model tiers. Download for macOS, Windows, or Linux." />
+<meta property="og:title" content="AXIOM — genuinely-good agentic coding, free." />
+<meta property="og:description" content="A real coding agent built to be excellent on free model tiers. Bring your own free keys, or sign in with Google." />
+<meta name="theme-color" content="#0e0d0c" />
 <link rel="icon" href="favicon.png" />
 <style>
   :root {
-    --bg: #0e0d0c;
-    --panel: #181615;
+    --bg: #0c0b0a;
+    --bg2: #110f0e;
+    --panel: rgba(24, 22, 21, 0.7);
     --line: #2a2725;
-    --text: #f2ede9;
+    --text: #f4efeb;
     --muted: #9b948e;
+    --muted-dim: #6d6661;
     --coral: #ff6b5c;
+    --coral-soft: #ff8a7e;
     --coral-dim: #c4554a;
+    --green: #5ad19a;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
+  html { scroll-behavior: smooth; }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 0 24px;
+    overflow-x: hidden;
+    position: relative;
   }
-  .wrap { width: 100%; max-width: 720px; padding: 96px 0 64px; text-align: center; }
-  .logo {
-    font-weight: 800;
-    letter-spacing: 0.18em;
-    font-size: 14px;
-    color: var(--coral);
-    margin-bottom: 40px;
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
   }
+
+  /* ---------- Animated aurora + grain background ---------- */
+  .bg-aurora {
+    position: fixed; inset: -20% -20% -20% -20%;
+    z-index: -3; filter: blur(70px); opacity: 0.55;
+    background:
+      radial-gradient(38% 44% at 22% 28%, rgba(255,107,92,0.55), transparent 70%),
+      radial-gradient(34% 40% at 80% 22%, rgba(255,138,126,0.30), transparent 70%),
+      radial-gradient(46% 50% at 60% 80%, rgba(90,209,154,0.18), transparent 70%);
+    animation: drift 22s ease-in-out infinite alternate;
+  }
+  @keyframes drift {
+    0%   { transform: translate3d(-3%, -2%, 0) scale(1.05) rotate(0deg); }
+    50%  { transform: translate3d(4%, 3%, 0) scale(1.15) rotate(8deg); }
+    100% { transform: translate3d(-2%, 4%, 0) scale(1.08) rotate(-6deg); }
+  }
+  .bg-grid {
+    position: fixed; inset: 0; z-index: -2; opacity: 0.4;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(circle at 50% 30%, #000 30%, transparent 80%);
+  }
+  .bg-grain {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: grain 0.6s steps(2) infinite;
+  }
+  @keyframes grain { to { transform: translate(-4%, 3%); } }
+
+  /* ---------- Nav ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px clamp(20px, 5vw, 56px);
+    backdrop-filter: blur(12px);
+    background: linear-gradient(to bottom, rgba(12,11,10,0.85), rgba(12,11,10,0));
+    animation: fadeDown 0.8s var(--ease) both;
+  }
+  nav .brand { font-weight: 800; letter-spacing: 0.32em; font-size: 15px; }
+  nav .brand b { color: var(--coral); }
+  nav a.ghost {
+    font-size: 14px; color: var(--muted); text-decoration: none;
+    padding: 8px 16px; border: 1px solid var(--line); border-radius: 9px;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  nav a.ghost:hover { color: var(--text); border-color: var(--coral-dim); background: rgba(255,107,92,0.06); }
+  @keyframes fadeDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- Layout ---------- */
+  main { max-width: 980px; margin: 0 auto; padding: 0 clamp(20px, 5vw, 24px); }
+  section { padding: clamp(64px, 12vh, 120px) 0; }
+
+  /* ---------- Hero ---------- */
+  .hero { text-align: center; padding-top: clamp(48px, 9vh, 96px); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--coral-soft);
+    border: 1px solid rgba(255,107,92,0.25); border-radius: 999px;
+    padding: 6px 14px; margin-bottom: 30px;
+    background: rgba(255,107,92,0.06);
+    animation: pop .7s var(--ease) .1s both;
+  }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(90,209,154,0.6); animation: ping 2s ease-out infinite; }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(90,209,154,0.55);} 70%{box-shadow:0 0 0 9px rgba(90,209,154,0);} 100%{box-shadow:0 0 0 0 rgba(90,209,154,0);} }
+
   h1 {
-    font-size: 52px;
-    line-height: 1.08;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin-bottom: 20px;
+    font-size: clamp(40px, 8vw, 76px);
+    line-height: 1.02; font-weight: 800; letter-spacing: -0.03em;
+    margin-bottom: 22px;
   }
-  h1 .accent { color: var(--coral); }
-  .tagline { font-size: 19px; color: var(--muted); max-width: 540px; margin: 0 auto 44px; }
+  h1 .reveal { display: inline-block; }
+  h1 .accent {
+    background: linear-gradient(110deg, var(--coral), var(--coral-soft) 45%, #ffd2c9 70%, var(--coral));
+    background-size: 220% auto;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shine 5s linear infinite;
+  }
+  @keyframes shine { to { background-position: 220% center; } }
+  .tagline {
+    font-size: clamp(17px, 2.4vw, 21px); color: var(--muted);
+    max-width: 560px; margin: 0 auto 40px;
+    animation: rise 1s var(--ease) .5s both;
+  }
+
+  /* word-by-word headline reveal */
+  .word { display: inline-block; opacity: 0; transform: translateY(40px) rotate(4deg); animation: word .9s var(--ease) forwards; }
+  @keyframes word { to { opacity: 1; transform: none; } }
+  @keyframes pop { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: none; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- Download button ---------- */
+  .cta { display: flex; flex-direction: column; align-items: center; gap: 14px; animation: rise 1s var(--ease) .7s both; }
   .download {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    background: var(--coral);
-    color: #1a0f0d;
-    font-weight: 700;
-    font-size: 17px;
-    padding: 16px 30px;
-    border-radius: 12px;
-    text-decoration: none;
-    border: none;
-    cursor: pointer;
-    transition: transform 0.08s ease, background 0.15s ease;
+    position: relative; display: inline-flex; align-items: center; gap: 12px;
+    font-weight: 700; font-size: 17px; color: #1a0d0b;
+    padding: 17px 34px; border-radius: 14px; border: none; cursor: pointer;
+    text-decoration: none; overflow: hidden; isolation: isolate;
+    background: linear-gradient(180deg, var(--coral-soft), var(--coral));
+    box-shadow: 0 10px 40px -10px rgba(255,107,92,0.6), inset 0 1px 0 rgba(255,255,255,0.4);
+    transition: transform .18s var(--ease), box-shadow .25s var(--ease);
+    will-change: transform;
   }
-  .download:hover { background: #ff7d70; transform: translateY(-1px); }
-  .download:active { transform: translateY(0); }
-  .download.disabled { background: var(--panel); color: var(--muted); cursor: default; pointer-events: none; }
-  .sub { margin-top: 16px; font-size: 14px; color: var(--muted); }
-  .others { margin-top: 36px; }
-  .others summary {
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 14px;
-    list-style: none;
-    user-select: none;
+  .download::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,0.55) 50%, transparent 70%);
+    transform: translateX(-120%); transition: none;
   }
-  .others summary::-webkit-details-marker { display: none; }
-  .others summary:hover { color: var(--text); }
-  .grid {
-    margin-top: 22px;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-    text-align: left;
+  .download:hover { box-shadow: 0 16px 54px -8px rgba(255,107,92,0.75), inset 0 1px 0 rgba(255,255,255,0.5); }
+  .download:hover::before { animation: sweep 0.9s var(--ease); }
+  @keyframes sweep { to { transform: translateX(120%); } }
+  .download:active { transform: scale(0.97); }
+  .download.disabled { background: var(--panel); color: var(--muted); cursor: default; box-shadow: none; pointer-events: none; }
+  .download .ico { display: inline-flex; }
+  .sub { font-size: 13.5px; color: var(--muted-dim); min-height: 18px; }
+  .sub b { color: var(--muted); font-weight: 600; }
+
+  /* platform chips */
+  .platforms { margin-top: 30px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; animation: rise 1s var(--ease) .9s both; }
+  .chip {
+    font-size: 13px; color: var(--muted); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all .2s var(--ease); background: rgba(255,255,255,0.015);
   }
-  .grid a {
-    display: block;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 14px 16px;
-    color: var(--text);
-    text-decoration: none;
-    transition: border-color 0.15s ease;
+  .chip:hover { color: var(--text); border-color: var(--coral-dim); transform: translateY(-2px); }
+  .chip.live { color: var(--coral-soft); border-color: rgba(255,107,92,0.3); }
+  .chip[data-state="soon"] { opacity: .55; }
+  .chip .tag { font-size: 11px; color: var(--muted-dim); }
+
+  /* ---------- Terminal mock ---------- */
+  .stage { margin: 60px auto 0; max-width: 760px; animation: rise 1.1s var(--ease) 1s both; }
+  .terminal {
+    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(20,18,17,0.92), rgba(14,13,12,0.92));
+    box-shadow: 0 40px 120px -40px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.02);
+    backdrop-filter: blur(8px);
+    transform: perspective(1400px) rotateX(6deg); transform-origin: center top;
+    transition: transform .4s var(--ease);
   }
-  .grid a:hover { border-color: var(--coral-dim); }
-  .grid .os { font-weight: 600; font-size: 15px; }
-  .grid .file { font-size: 12px; color: var(--muted); margin-top: 3px; word-break: break-all; }
-  footer { color: var(--muted); font-size: 13px; padding: 32px 0 56px; }
+  .terminal:hover { transform: perspective(1400px) rotateX(0deg); }
+  .term-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .term-bar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .term-bar .d.r { background: #ff5f57; } .term-bar .d.y { background: #febc2e; } .term-bar .d.g { background: #28c840; }
+  .term-bar .t { margin-left: auto; font-size: 12px; color: var(--muted-dim); }
+  .term-body { padding: 22px 24px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; line-height: 1.85; text-align: left; min-height: 250px; }
+  .ln { white-space: pre-wrap; }
+  .ln .p { color: var(--coral); } .ln .u { color: var(--text); } .ln .c { color: var(--muted); }
+  .ln .ok { color: var(--green); } .ln .tool { color: var(--coral-soft); }
+  .cursor { display: inline-block; width: 9px; height: 17px; background: var(--coral); vertical-align: -3px; margin-left: 2px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------- Features ---------- */
+  .feat-head { text-align: center; margin-bottom: 56px; }
+  .feat-head h2 { font-size: clamp(28px, 4.5vw, 44px); letter-spacing: -0.02em; font-weight: 800; }
+  .feat-head p { color: var(--muted); margin-top: 12px; font-size: 17px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .card {
+    position: relative; padding: 26px; border-radius: 16px;
+    border: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(6px);
+    overflow: hidden;
+    opacity: 0; transform: translateY(34px);
+    transition: opacity .7s var(--ease), transform .7s var(--ease), border-color .3s;
+  }
+  .card.in { opacity: 1; transform: none; }
+  .card:hover { border-color: var(--coral-dim); }
+  .card::after {
+    content: ""; position: absolute; width: 320px; height: 320px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,107,92,0.16), transparent 60%);
+    top: var(--my, 50%); left: var(--mx, 50%); transform: translate(-50%,-50%);
+    opacity: 0; transition: opacity .35s; pointer-events: none;
+  }
+  .card:hover::after { opacity: 1; }
+  .card .emoji { font-size: 24px; margin-bottom: 14px; display: block; }
+  .card h3 { font-size: 17px; margin-bottom: 8px; letter-spacing: -0.01em; }
+  .card p { font-size: 14.5px; color: var(--muted); }
+
+  /* ---------- Closing ---------- */
+  .close { text-align: center; }
+  .close h2 { font-size: clamp(28px, 5vw, 50px); letter-spacing: -0.02em; font-weight: 800; margin-bottom: 28px; }
+  .close .accent { color: var(--coral); }
+  footer { text-align: center; color: var(--muted-dim); font-size: 13px; padding: 40px 0 64px; border-top: 1px solid var(--line); margin-top: 40px; }
   footer a { color: var(--muted); }
-  .ver { color: var(--coral); }
+  footer .ver { color: var(--coral); }
 </style>
 </head>
 <body>
-  <main class="wrap">
-    <div class="logo">A X I O M</div>
-    <h1>Genuinely-good agentic coding,<br /><span class="accent">free.</span></h1>
-    <p class="tagline">
-      A real coding agent — read, write, edit, run — built to be excellent on
-      free model tiers. Bring your own free keys, or sign in with Google.
-    </p>
+  <div class="bg-aurora"></div>
+  <div class="bg-grid"></div>
+  <div class="bg-grain"></div>
 
-    <a id="primary" class="download disabled" href="#">Detecting your platform…</a>
-    <div class="sub" id="sub"></div>
+  <nav>
+    <div class="brand">A X I <b>O</b> M</div>
+    <a class="ghost" href="https://github.com/fireboltmagnum/AXIOM">GitHub ↗</a>
+  </nav>
 
-    <details class="others">
-      <summary>All platforms &amp; versions ↓</summary>
-      <div class="grid" id="grid"></div>
-    </details>
+  <main>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="badge"><span class="dot"></span> Free forever · bring your own free keys</div>
+      <h1 id="headline" aria-label="Genuinely-good agentic coding, free.">
+        <span class="reveal">Genuinely-good</span><br />
+        <span class="reveal">agentic coding,</span>
+        <span class="reveal accent">free.</span>
+      </h1>
+      <p class="tagline">
+        A real coding agent — it reads, writes, edits, and runs your code.
+        Built to be excellent on <b>free</b> model tiers. Bring your own keys, or sign in with Google.
+      </p>
+
+      <div class="cta">
+        <a id="primary" class="download disabled" href="#" aria-live="polite">
+          <span class="ico" id="primary-ico">◐</span>
+          <span id="primary-label">Detecting your platform…</span>
+        </a>
+        <div class="sub" id="sub"></div>
+      </div>
+
+      <div class="platforms" id="platforms"></div>
+
+      <!-- live agent terminal -->
+      <div class="stage">
+        <div class="terminal">
+          <div class="term-bar">
+            <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+            <span class="t">axiom — agent session</span>
+          </div>
+          <div class="term-body" id="term"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section>
+      <div class="feat-head">
+        <h2>Not a chatbot. An agent.</h2>
+        <p>Real tools, real files, real terminal — on models that cost you nothing.</p>
+      </div>
+      <div class="grid" id="features">
+        <div class="card"><span class="emoji">🛠️</span><h3>Reads, writes, runs</h3><p>Full file + shell tools. It edits your repo and runs commands, not just suggests them.</p></div>
+        <div class="card"><span class="emoji">🆓</span><h3>Tuned for free tiers</h3><p>The whole point: be genuinely good on the free models people can actually access.</p></div>
+        <div class="card"><span class="emoji">🔑</span><h3>Bring your own keys</h3><p>Plug in any free provider key, or sign in with Google / Codex OAuth. No subscription.</p></div>
+        <div class="card"><span class="emoji">🎨</span><h3>Space canvas</h3><p>A dedicated visual agent that diagrams architecture and flows, then hands the design to Chat.</p></div>
+        <div class="card"><span class="emoji">🧠</span><h3>AXIOM runtime</h3><p>CodeAct execution, agent memory, deep research, and test-time scaling baked in.</p></div>
+        <div class="card"><span class="emoji">💻</span><h3>Runs everywhere</h3><p>Native desktop app for macOS, Windows, and Linux. One download, your platform.</p></div>
+      </div>
+    </section>
+
+    <!-- CLOSE -->
+    <section class="close">
+      <h2>Coding help shouldn't cost<br /><span class="accent">a paycheck.</span></h2>
+      <div class="cta">
+        <a class="download" id="primary2" href="#" onclick="document.getElementById('primary').click(); return false;">
+          <span>↓</span><span id="primary2-label">Download AXIOM</span>
+        </a>
+      </div>
+    </section>
   </main>
 
   <footer>
     <span id="ver"></span>
-    <a href="https://github.com/fireboltmagnum/AXIOM">Source on GitHub</a>
+    <a href="https://github.com/fireboltmagnum/AXIOM">Source on GitHub</a> ·
+    <a href="https://github.com/fireboltmagnum/AXIOM/releases">All releases</a>
   </footer>
 
 <script>
-  // Repo that hosts the GitHub Releases (installers are attached there).
   const REPO = "fireboltmagnum/AXIOM";
-  const RELEASES_PAGE = `https://github.com/${REPO}/releases/latest`;
+  const RELEASES_PAGE = `https://github.com/${REPO}/releases`;
 
-  // Detect OS + CPU arch from the browser. Best-effort; the "All platforms"
-  // list is always available as a fallback.
-  function detect() {
-    const ua = navigator.userAgent;
-    const plat = (navigator.platform || "").toLowerCase();
-    const isArm =
-      /arm|aarch64/i.test(ua) ||
-      (navigator.userAgentData && navigator.userAgentData.platform === "macOS" &&
-        navigator.maxTouchPoints > 0) || false;
-    if (/win/i.test(plat) || /windows/i.test(ua)) return { os: "windows", label: "Windows" };
-    if (/mac/i.test(plat) || /mac os x/i.test(ua)) {
-      // Apple Silicon vs Intel — UA rarely reveals it, default to arm64 (current Macs).
-      return { os: "macos", label: "macOS", arch: isArm ? "arm64" : "intel" };
-    }
-    if (/linux/i.test(plat) || /linux/i.test(ua)) return { os: "linux", label: "Linux" };
-    return { os: null, label: "your platform" };
+  /* ---------- headline word-by-word reveal ---------- */
+  document.querySelectorAll("#headline .reveal").forEach((span, i) => {
+    const words = span.textContent.split(" ");
+    span.innerHTML = words
+      .map((w, j) => `<span class="word" style="animation-delay:${0.15 + i * 0.18 + j * 0.06}s">${w}</span>`)
+      .join(" ");
+  });
+
+  /* ---------- terminal typing animation ---------- */
+  const TERM = [
+    { html: `<span class="p">axiom</span> <span class="u">›</span> <span class="u">refactor the auth flow and add tests</span>`, type: true },
+    { html: `<span class="c">  → reading</span> <span class="tool">src/auth/session.ts</span>`, delay: 500 },
+    { html: `<span class="c">  → editing</span> <span class="tool">3 files</span> <span class="ok">✓</span>`, delay: 600 },
+    { html: `<span class="c">  → running</span> <span class="tool">npm test</span>`, delay: 600 },
+    { html: `<span class="ok">  ✓ 24 passing</span> <span class="c">· done in 2.1s</span>`, delay: 800 },
+    { html: `<span class="p">axiom</span> <span class="u">›</span> <span class="cursor"></span>`, delay: 500, last: true },
+  ];
+  const term = document.getElementById("term");
+  function typeLine(el, text, done) {
+    let i = 0;
+    const raw = text.replace(/<[^>]+>/g, "");
+    (function step() {
+      el.innerHTML = `<span class="p">axiom</span> <span class="u">›</span> <span class="u">${raw.slice(raw.indexOf("›") > -1 ? 0 : 0, i)}</span>`;
+      // simpler: just reveal the user portion char by char
+      const userText = "refactor the auth flow and add tests";
+      el.innerHTML = `<span class="p">axiom</span> <span class="u">›</span> <span class="u">${userText.slice(0, i)}</span><span class="cursor"></span>`;
+      if (i++ < userText.length) setTimeout(step, 34);
+      else { el.innerHTML = text; done && done(); }
+    })();
   }
+  function runTerm() {
+    term.innerHTML = "";
+    let idx = 0;
+    function next() {
+      if (idx >= TERM.length) { setTimeout(() => runTerm(), 3500); return; }
+      const item = TERM[idx++];
+      const div = document.createElement("div");
+      div.className = "ln";
+      term.appendChild(div);
+      if (item.type) typeLine(div, item.html, () => setTimeout(next, 350));
+      else { div.innerHTML = item.html; setTimeout(next, item.delay || 400); }
+    }
+    next();
+  }
+  // start when terminal scrolls into view
+  const termObs = new IntersectionObserver((es) => {
+    es.forEach((e) => { if (e.isIntersecting) { runTerm(); termObs.disconnect(); } });
+  }, { threshold: 0.4 });
+  termObs.observe(term);
 
-  // Map a release asset filename to an OS bucket. Tauri names files like:
-  //   AXIOM_0.1.0_aarch64.dmg  /  AXIOM_0.1.0_x64.dmg  (macOS)
-  //   AXIOM_0.1.0_x64-setup.exe / AXIOM_0.1.0_x64_en-US.msi (Windows)
-  //   axiom_0.1.0_amd64.deb  /  AXIOM_0.1.0_amd64.AppImage (Linux)
+  /* ---------- scroll-reveal feature cards + cursor glow ---------- */
+  const cardObs = new IntersectionObserver((es) => {
+    es.forEach((e, i) => { if (e.isIntersecting) { setTimeout(() => e.target.classList.add("in"), i * 90); cardObs.unobserve(e.target); } });
+  }, { threshold: 0.2 });
+  document.querySelectorAll(".card").forEach((c) => {
+    cardObs.observe(c);
+    c.addEventListener("pointermove", (ev) => {
+      const r = c.getBoundingClientRect();
+      c.style.setProperty("--mx", `${ev.clientX - r.left}px`);
+      c.style.setProperty("--my", `${ev.clientY - r.top}px`);
+    });
+  });
+
+  /* ---------- magnetic download button ---------- */
+  const magnet = document.getElementById("primary");
+  magnet.addEventListener("pointermove", (e) => {
+    const r = magnet.getBoundingClientRect();
+    const x = (e.clientX - r.left - r.width / 2) * 0.25;
+    const y = (e.clientY - r.top - r.height / 2) * 0.4;
+    magnet.style.transform = `translate(${x}px, ${y}px)`;
+  });
+  magnet.addEventListener("pointerleave", () => { magnet.style.transform = ""; });
+
+  /* ---------- OS detection + GitHub Releases wiring ---------- */
+  function detect() {
+    const ua = navigator.userAgent, plat = (navigator.platform || "").toLowerCase();
+    const isArm = /arm|aarch64/i.test(ua) ||
+      (navigator.userAgentData && navigator.userAgentData.platform === "macOS" && navigator.maxTouchPoints > 0);
+    if (/win/i.test(plat) || /windows/i.test(ua)) return { os: "windows", label: "Windows", ico: "⊞" };
+    if (/mac/i.test(plat) || /mac os x/i.test(ua)) return { os: "macos", label: "macOS", arch: isArm ? "arm64" : "intel", ico: "" };
+    if (/linux/i.test(plat) || /linux/i.test(ua)) return { os: "linux", label: "Linux", ico: "🐧" };
+    return { os: null, label: "your platform", ico: "↓" };
+  }
   function classify(name) {
     const n = name.toLowerCase();
-    if (n.endsWith(".dmg") || n.endsWith(".app.tar.gz")) {
-      return { os: "macos", arch: /aarch64|arm64/.test(n) ? "arm64" : "intel" };
-    }
+    if (n.endsWith(".dmg") || n.endsWith(".app.tar.gz")) return { os: "macos", arch: /aarch64|arm64/.test(n) ? "arm64" : "intel" };
     if (n.endsWith(".exe") || n.endsWith(".msi")) return { os: "windows" };
     if (n.endsWith(".appimage") || n.endsWith(".deb") || n.endsWith(".rpm")) return { os: "linux" };
     return { os: null };
   }
-
-  const FRIENDLY = {
-    macos: "macOS",
-    windows: "Windows",
-    linux: "Linux",
-  };
+  const FRIENDLY = { macos: "macOS", windows: "Windows", linux: "Linux" };
+  const ICON = { macos: "", windows: "⊞", linux: "🐧" };
 
   async function load() {
     const me = detect();
     const primary = document.getElementById("primary");
+    const label = document.getElementById("primary-label");
+    const ico = document.getElementById("primary-ico");
     const sub = document.getElementById("sub");
-    const grid = document.getElementById("grid");
+    const platforms = document.getElementById("platforms");
     const ver = document.getElementById("ver");
+    document.getElementById("primary2-label").textContent = `Download for ${me.label}`;
+
+    // helper to render the platform chips
+    function renderChips(byOs) {
+      platforms.innerHTML = "";
+      for (const os of ["macos", "windows", "linux"]) {
+        const a = document.createElement("a");
+        a.className = "chip" + (os === me.os ? " live" : "");
+        const asset = byOs[os];
+        if (asset) { a.href = asset.url; a.innerHTML = `${ICON[os]} ${FRIENDLY[os]}`; }
+        else { a.href = RELEASES_PAGE; a.dataset.state = "soon"; a.innerHTML = `${ICON[os]} ${FRIENDLY[os]} <span class="tag">soon</span>`; }
+        platforms.appendChild(a);
+      }
+    }
 
     let release;
     try {
-      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-        headers: { Accept: "application/vnd.github+json" },
-      });
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
       if (!res.ok) throw new Error("no release");
       release = await res.json();
     } catch (e) {
-      // No published release yet (or API rate-limited) — point at the releases page.
-      primary.textContent = `Download for ${me.label}`;
-      primary.classList.remove("disabled");
+      // No published release yet — be honest, don't dump them on GitHub.
+      label.textContent = "Builds publishing soon";
+      ico.textContent = "◐";
       primary.href = RELEASES_PAGE;
-      sub.innerHTML = `<a style="color:var(--muted)" href="${RELEASES_PAGE}">View all releases →</a>`;
+      primary.classList.remove("disabled");
+      sub.innerHTML = `Installers are being built for macOS, Windows &amp; Linux. <b>Check back shortly.</b>`;
+      renderChips({});
       return;
     }
 
     ver.innerHTML = `AXIOM <span class="ver">${release.tag_name || ""}</span> · `;
+    const assets = (release.assets || []).filter((a) => { const n = a.name.toLowerCase(); return !n.endsWith(".sig") && !n.endsWith(".json"); });
 
-    const assets = (release.assets || []).filter((a) => {
-      const n = a.name.toLowerCase();
-      // Hide signatures / update manifests from the human list.
-      return !n.endsWith(".sig") && !n.endsWith(".json");
-    });
-
-    // Pick the best primary download for the detected OS (and arch on mac).
+    // best primary per OS (+ mac arch); prefer installers
+    const byOs = {};
     let best = null;
     for (const a of assets) {
       const c = classify(a.name);
-      if (c.os !== me.os) continue;
-      if (me.os === "macos" && me.arch && c.arch && c.arch !== me.arch && best) continue;
-      // Prefer installers (.dmg/.exe/.AppImage) over archives.
+      if (!c.os) continue;
       const installer = /\.(dmg|exe|msi|appimage)$/i.test(a.name);
-      if (!best || (installer && !/\.(dmg|exe|msi|appimage)$/i.test(best.name))) best = a;
-      if (me.os === "macos" && me.arch && c.arch === me.arch && installer) { best = a; break; }
+      if (!byOs[c.os] || installer) byOs[c.os] = { url: a.browser_download_url, name: a.name, arch: c.arch };
+      if (c.os === me.os) {
+        if (me.os === "macos" && me.arch && c.arch === me.arch && installer) best = a;
+        else if (!best) best = a;
+      }
     }
 
     if (best) {
-      primary.textContent = `Download for ${me.label}`;
-      primary.classList.remove("disabled");
+      label.textContent = `Download for ${me.label}`;
+      ico.textContent = me.ico || "↓";
       primary.href = best.browser_download_url;
-      sub.textContent = best.name;
+      sub.innerHTML = `<b>${best.name}</b>`;
     } else {
-      primary.textContent = `Download for ${me.label}`;
-      primary.classList.remove("disabled");
-      primary.href = RELEASES_PAGE;
-      sub.textContent = "No build for your platform in the latest release — see all below.";
+      label.textContent = `Download for ${me.label}`;
+      ico.textContent = me.ico || "↓";
+      primary.href = byOs[me.os] ? byOs[me.os].url : RELEASES_PAGE;
+      sub.innerHTML = best ? "" : "No build for your platform in this release yet.";
     }
-
-    // Build the full grid, grouped by OS.
-    const buckets = { macos: [], windows: [], linux: [] };
-    for (const a of assets) {
-      const c = classify(a.name);
-      if (c.os && buckets[c.os]) buckets[c.os].push(a);
-    }
-    grid.innerHTML = "";
-    for (const os of ["macos", "windows", "linux"]) {
-      for (const a of buckets[os]) {
-        const link = document.createElement("a");
-        link.href = a.browser_download_url;
-        link.innerHTML = `<div class="os">${FRIENDLY[os]}</div><div class="file">${a.name}</div>`;
-        grid.appendChild(link);
-      }
-    }
-    if (!grid.children.length) {
-      grid.innerHTML = `<a href="${RELEASES_PAGE}"><div class="os">All releases</div><div class="file">on GitHub →</div></a>`;
-    }
+    primary.classList.remove("disabled");
+    renderChips(byOs);
   }
-
   load();
 </script>
 </body>
