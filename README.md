@@ -23,21 +23,7 @@ High-Performance Stack: Built on a deeply integrated TypeScript (92%) and Rust f
 AXIOM research paper full.md — The comprehensive theoretical foundation, methodology, and performance models driving the AXIOM architecture.
 
 ⬡ Getting Started
-Prerequisites
-Node.js (v18+)
-
-Rust Toolchain (rustc, cargo)
-
-Initialization
-Clone the repository to your local machine and initialize the dependencies:
-
-Bash
-git clone https://github.com/fireboltmagnum/AXIOM.git
-cd AXIOM
-
-# Install core runtime dependencies
-npm install 
-# (or use yarn/pnpm)
+go to https://fireboltmagnum.github.io/AXIOM/ to download for linux, mac and windows
 ⬡ Roadmap & Contribution
 AXIOM is designed as a foundational leap in deterministic AI engineering. For the full context on our agentic memory architecture and OS-level execution model, please consult the included research paper.
 
