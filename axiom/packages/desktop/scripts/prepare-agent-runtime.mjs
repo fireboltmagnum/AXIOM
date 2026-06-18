@@ -10,7 +10,10 @@ const codingAgentDir = join(repoRoot, "packages", "coding-agent");
 const outputDir = join(desktopDir, "src-tauri", "resources", "agent");
 
 function run(command, args, cwd = repoRoot) {
-	const result = spawnSync(command, args, { cwd, stdio: "inherit" });
+	// shell:true is required on Windows: tsgo/bun/npm resolve to .cmd shims, and
+	// spawnSync cannot execute a .cmd directly without a shell (it needs cmd.exe).
+	// Our command paths contain no spaces, so shell quoting is not a concern.
+	const result = spawnSync(command, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
 	if (result.status !== 0) {
 		throw new Error(`Command failed: ${command} ${args.join(" ")}`);
 	}
