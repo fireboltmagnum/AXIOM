@@ -40,13 +40,12 @@ pub struct GeminiOAuthTokens {
 }
 
 fn tokens_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".axiom").join("gemini-oauth.json"))
+    Some(crate::home_dir()?.join(".axiom").join("gemini-oauth.json"))
 }
 
 /// Persist tokens with owner-only permissions.
 fn save_tokens(tokens: &GeminiOAuthTokens) -> Result<(), String> {
-    let path = tokens_path().ok_or("no HOME")?;
+    let path = tokens_path().ok_or("could not resolve your home directory (HOME or USERPROFILE)")?;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }

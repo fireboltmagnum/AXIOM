@@ -165,16 +165,25 @@ export function Settings({ onClose }: { onClose: () => void }) {
 	return (
 		<div className="settings-overlay" onClick={onClose}>
 			<div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+				<nav className="settings-rail">
+					<div className="rail-title">Settings</div>
+					<div className="settings-tabs">
+						<button className={tab === "account" ? "on" : ""} onClick={() => setTab("account")}>
+							<span className="tico" aria-hidden="true">◆</span> Account
+						</button>
+						<button className={tab === "models" ? "on" : ""} onClick={() => setTab("models")}>
+							<span className="tico" aria-hidden="true">⚇</span> Models
+						</button>
+						<button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>
+							<span className="tico" aria-hidden="true">⚷</span> API Keys
+						</button>
+					</div>
+				</nav>
+
 				<header className="settings-head">
-					<h2>Settings</h2>
+					<h2>{tab === "account" ? "Account" : tab === "models" ? "Models" : "API Keys"}</h2>
 					<button className="settings-close" onClick={onClose} aria-label="Close settings">✕</button>
 				</header>
-
-				<nav className="settings-tabs">
-					<button className={tab === "account" ? "on" : ""} onClick={() => setTab("account")}>Account</button>
-					<button className={tab === "models" ? "on" : ""} onClick={() => setTab("models")}>Models</button>
-					<button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>API Keys</button>
-				</nav>
 
 				<div className="settings-body">
 					{tab === "account" && (

@@ -56,17 +56,15 @@ pub struct CodexOAuthTokens {
 }
 
 fn tokens_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".axiom").join("codex-oauth.json"))
+    Some(crate::home_dir()?.join(".axiom").join("codex-oauth.json"))
 }
 
 fn agent_auth_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".axiom").join("agent").join("auth.json"))
+    Some(crate::home_dir()?.join(".axiom").join("agent").join("auth.json"))
 }
 
 fn save_tokens(tokens: &CodexOAuthTokens) -> Result<(), String> {
-    let path = tokens_path().ok_or("no HOME")?;
+    let path = tokens_path().ok_or("could not resolve your home directory (HOME or USERPROFILE)")?;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -84,7 +82,7 @@ fn save_agent_auth(tokens: &CodexOAuthTokens) -> Result<(), String> {
     if tokens.access_token.is_empty() || tokens.refresh_token.is_empty() || tokens.account_id.is_empty() {
         return Err("Codex OAuth token is incomplete; cannot configure agent auth.".into());
     }
-    let path = agent_auth_path().ok_or("no HOME")?;
+    let path = agent_auth_path().ok_or("could not resolve your home directory (HOME or USERPROFILE)")?;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }

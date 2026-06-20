@@ -171,10 +171,9 @@ fn dbg_log(msg: &str) {
     }
 }
 
-/// `~/.axiom/.env`, resolved without extra dependencies.
+/// `~/.axiom/.env`, resolved without extra dependencies (cross-platform home).
 fn dirs_axiom_env() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".axiom").join(".env"))
+    Some(crate::home_dir()?.join(".axiom").join(".env"))
 }
 
 fn ensure_started(app: &AppHandle, agent: &mut Agent, event_channel: &'static str) -> Result<(), String> {

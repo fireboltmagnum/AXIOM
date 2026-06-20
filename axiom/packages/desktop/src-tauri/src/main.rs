@@ -17,6 +17,15 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+/// Resolve the user's home directory cross-platform. On Windows `HOME` is unset
+/// (it's `USERPROFILE`), so relying on `HOME` alone broke the agent dir, the env
+/// file, and Codex/Gemini OAuth ("error: couldn't find home"). Check both.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppConfig {
@@ -131,9 +140,7 @@ fn load_active_tasks(agent_dir: &std::path::Path) -> Vec<DashboardTask> {
 
 #[tauri::command]
 fn axiom_data_summary() -> AxiomDataSummary {
-    let agent_dir = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    let agent_dir = home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".axiom/agent");
     let mut stored_bytes = 0;
@@ -186,8 +193,7 @@ pub fn default_cwd() -> String {
     if !cur.is_empty() && cur != "/" {
         return cur;
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
+    if let Some(home) = home_dir() {
         let workspace = home.join("AXIOM");
         // Best-effort create a tidy default workspace; ignore failures.
         let _ = std::fs::create_dir_all(&workspace);
@@ -301,8 +307,7 @@ fn read_file_base64(path: String) -> Result<String, String> {
 
 /// Path to the user's AXIOM env file (`~/.axiom/.env`).
 fn axiom_env_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".axiom").join(".env"))
+    Some(home_dir()?.join(".axiom").join(".env"))
 }
 
 /// Read the AXIOM config as key→value pairs for the Settings panel. Secrets are
@@ -333,7 +338,7 @@ fn settings_read() -> serde_json::Value {
 /// process env too so a relaunch isn't required for most changes.
 #[tauri::command]
 fn settings_write_env(updates: std::collections::HashMap<String, String>) -> Result<(), String> {
-    let path = axiom_env_path().ok_or("no HOME")?;
+    let path = axiom_env_path().ok_or("could not resolve your home directory (HOME or USERPROFILE)")?;
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }

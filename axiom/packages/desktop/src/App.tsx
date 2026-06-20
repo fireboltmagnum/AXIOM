@@ -3,6 +3,7 @@ import type { AgentSessionInfo } from "./bridge.ts";
 import { type SpaceHandoff, Surface } from "./shell/surfaces.tsx";
 import { AxiomWordmark } from "./shell/Logo.tsx";
 import { Settings } from "./shell/Settings.tsx";
+import { Onboarding } from "./shell/Onboarding.tsx";
 import { type SurfaceKind, SURFACES, type Tab, newTabId } from "./shell/types.ts";
 import { loadWorkspaces, type Workspace, updateWorkspace } from "./store.ts";
 
@@ -28,6 +29,32 @@ export function App() {
 	const [sessionQuery, setSessionQuery] = useState("");
 	const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	// null = still checking; true = show onboarding gate; false = configured.
+	const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
+
+	// Decide whether to show the first-run gate. "Done" = ANY working auth:
+	// a Google login, a ChatGPT login, or any provider API key in ~/.axiom/.env.
+	useEffect(() => {
+		let cancelled = false;
+		async function check() {
+			try {
+				const [env, gem, cdx] = await Promise.all([
+					window.axiom.settings.read().catch(() => ({}) as Record<string, string>),
+					window.axiom.settings.geminiOAuthStatus().catch(() => ({ loggedIn: false })),
+					window.axiom.settings.codexOAuthStatus().catch(() => ({ loggedIn: false })),
+				]);
+				const hasKey = Object.entries(env).some(
+					([k, v]) => k.endsWith("_API_KEY") && typeof v === "string" && v.trim() !== "",
+				);
+				const authed = gem.loggedIn || cdx.loggedIn || hasKey;
+				if (!cancelled) setNeedsOnboarding(!authed);
+			} catch {
+				if (!cancelled) setNeedsOnboarding(false); // fail open — don't block the app
+			}
+		}
+		void check();
+		return () => { cancelled = true; };
+	}, []);
 
 	const refreshSessions = useCallback(async () => {
 		try {
@@ -225,6 +252,7 @@ export function App() {
 				</div>
 			</header>
 			{settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+			{needsOnboarding === true && <Onboarding onDone={() => setNeedsOnboarding(false)} />}
 
 			<div className="app-body">
 				<aside className="shell-sidebar no-drag" aria-label="AXIOM navigation and sessions">
