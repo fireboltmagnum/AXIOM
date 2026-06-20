@@ -1,6 +1,6 @@
 {
   "name": "@axiom/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "AXIOM Desktop — a single self-contained Tauri app (Chat · Space · Dashboard · IDE) over the real agent",
   "type": "module",

@@ -89,5 +89,5 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "AXIOM Desktop ${{ env.RELEASE_TAG }}"
-          releaseDraft: true
-          releaseBody: "AXIOM desktop builds for macOS, Windows, and Linux."
+          releaseDraft: false
+          releaseBody: "AXIOM desktop builds for macOS (Intel + Apple Silicon), Windows, and Linux."
